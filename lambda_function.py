@@ -26,6 +26,7 @@ Environment variables:
 
 import json
 import logging
+import time
 import urllib.request
 import urllib.error
 import os
@@ -361,8 +362,10 @@ def lambda_handler(event, context):
                 f"[DRY RUN] Real recipient: {email} ({full_name})\nTicket range: not set\n\n"
             )
             send_email(CHAD_EMAIL, f"[DRY RUN] {subject}", header + body)
+            time.sleep(0.5)
         else:
             send_email(email, subject, body)
+            time.sleep(0.5)
 
         emails_sent += 1
         logger.info(f"{'[DRY] ' if DRY_RUN else ''}Sent → {email} ({full_name})")
