@@ -328,6 +328,7 @@ def lambda_handler(event, context):
         lines += [
             "",
             "─" * 22,
+            "To update your buy/sell interests, reply to this email.",
             "To unsubscribe reply with \"unsubscribe\".",
             "Not an offer to buy or sell securities.",
         ]
