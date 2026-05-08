@@ -74,6 +74,8 @@ MAX_SIZE_FIELD      = "custom_label_3064645"
 STRUCTURE_FIELD     = "custom_label_3064360"
 FUND_STRUCTURE_ID   = 5077906
 DIRECT_STRUCTURE_ID = 6250090
+NEXUS_FIELD         = "custom_label_3751449"
+NEXUS_DIRECT_ID     = 6460632
 
 # Active deal stages
 FIRM_STAGE_ID       = 111800
@@ -257,6 +259,11 @@ def lambda_handler(event, context):
             continue
         key = company_name.lower()
         deal_cf = deal.get("custom_fields", {})
+        nexus_ids = deal_cf.get(NEXUS_FIELD) or []
+        if not isinstance(nexus_ids, list):
+            nexus_ids = [nexus_ids]
+        if NEXUS_DIRECT_ID not in nexus_ids:
+            continue
         if is_sell_deal(deal_cf):
             sell_deals_by_name.setdefault(key, []).append(deal)
         elif is_buy_deal(deal_cf):
