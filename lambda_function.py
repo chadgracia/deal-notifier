@@ -68,6 +68,7 @@ TICKET_SIZE_MAP = {
 # Deal custom fields
 DEAL_TYPE_FIELD     = "custom_label_1958"
 SELL_TYPE_ID        = 5011675
+BUY_TYPE_ID         = 5077819
 MIN_SIZE_FIELD      = "custom_label_3065488"
 MAX_SIZE_FIELD      = "custom_label_3064645"
 STRUCTURE_FIELD     = "custom_label_3064360"
@@ -126,6 +127,13 @@ def is_sell_deal(cf):
     if isinstance(type_ids, list):
         return SELL_TYPE_ID in type_ids
     return type_ids == SELL_TYPE_ID
+
+
+def is_buy_deal(cf):
+    type_ids = cf.get(DEAL_TYPE_FIELD, [])
+    if isinstance(type_ids, list):
+        return BUY_TYPE_ID in type_ids
+    return type_ids == BUY_TYPE_ID
 
 
 def get_structure(cf):
@@ -248,10 +256,12 @@ def lambda_handler(event, context):
         if not company_name:
             continue
         key = company_name.lower()
-        if is_sell_deal(deal.get("custom_fields", {})):
+        deal_cf = deal.get("custom_fields", {})
+        if is_sell_deal(deal_cf):
             sell_deals_by_name.setdefault(key, []).append(deal)
-        else:
+        elif is_buy_deal(deal_cf):
             buy_deals_by_name.setdefault(key, []).append(deal)
+        # deals with no type set are skipped
 
     logger.info(f"Deal index: {len(sell_deals_by_name)} sell, {len(buy_deals_by_name)} buy companies")
 
