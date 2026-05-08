@@ -192,23 +192,16 @@ def get_person_ticket_range(cf):
 
 
 def deal_in_range(deal, person_min, person_max):
-    """
-    Returns True if the deal's size range overlaps with the person's ticket range.
-    If person has no ticket size (both None), always True.
-    If deal has no size fields, always True (permissive).
-    """
     if person_min is None and person_max is None:
         return True
     cf       = deal.get("custom_fields", {})
     deal_min = parse_size(cf, MIN_SIZE_FIELD)
     deal_max = parse_size(cf, MAX_SIZE_FIELD)
-    # Skip if deal requires more than person can invest
     if deal_min is not None and person_max is not None:
         if deal_min > person_max:
             return False
-    # Skip if deal max is way below what person invests (less than 10% of their min)
-    if deal_max is not None and person_min is not None and person_min > 0:
-        if deal_max < person_min * 0.1:
+    if deal_max is not None and person_min is not None:
+        if deal_max < person_min:
             return False
     return True
 
@@ -313,7 +306,6 @@ def lambda_handler(event, context):
             no_match += 1
             continue
 
-        # Build email — sort by number of deals descending, then alphabetical
         greeting = first_name or full_name or "there"
         lines = [
             f"Hello {greeting},",
@@ -321,13 +313,13 @@ def lambda_handler(event, context):
             "New activity on trades you are following:",
         ]
 
-        for sec_name in sorted(sell_opps, key=lambda n: (-len(sell_opps[n]), n)):
+        for sec_name in sorted(sell_opps):
             lines.append("")
             lines.append(sec_name)
             for d in sell_opps[sec_name]:
                 lines.append(deal_line(d))
 
-        for sec_name in sorted(buy_opps, key=lambda n: (-len(buy_opps[n]), n)):
+        for sec_name in sorted(buy_opps):
             lines.append("")
             lines.append(sec_name)
             for d in buy_opps[sec_name]:
@@ -336,6 +328,7 @@ def lambda_handler(event, context):
         lines += [
             "",
             "─" * 22,
+            "To update your buy/sell interests, reply to this email.",
             "To unsubscribe reply with \"unsubscribe\".",
             "Not an offer to buy or sell securities.",
         ]
