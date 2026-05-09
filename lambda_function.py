@@ -77,6 +77,7 @@ SELL_TYPE_ID        = 5011675
 BUY_TYPE_ID         = 5077819
 MIN_SIZE_FIELD      = "custom_label_3065488"
 MAX_SIZE_FIELD      = "custom_label_3064645"
+GROSS_FIELD         = "custom_label_3064339"
 STRUCTURE_FIELD     = "custom_label_3064360"
 FUND_STRUCTURE_ID   = 5077906
 DIRECT_STRUCTURE_ID = 6250090
@@ -235,7 +236,12 @@ def deal_line(deal):
     else:
         structure_label = get_structure(cf)
 
+    gross = parse_size(cf, GROSS_FIELD)
+    price_str = f"@ ${gross:,.2f}" if gross is not None else None
+
     inner = f"{size_str} | {structure_label}" if size_str else structure_label
+    if price_str:
+        inner = f"{inner} {price_str}"
     return f"  New {side} ({inner}) → {TRADES_URL}/deal/{deal['id']}"
 
 
