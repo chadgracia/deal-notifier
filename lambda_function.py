@@ -51,6 +51,10 @@ MAX_EMAILS          = int(os.environ.get("MAX_EMAILS", "10"))
 BUYING_FIELD        = "custom_label_3322093"
 SELLING_FIELD       = "custom_label_3759156"
 TICKET_SIZE_FIELD   = "custom_label_3052210"
+BROADCAST_FIELD     = "custom_label_3774841"
+BROADCAST_YES_ID    = 6535328
+BROADCAST_NO_ID     = 6535329
+BROADCAST_HOLD_ID   = 6535330
 
 # Ticket size entry ID → (min, max) in dollars
 # min = lower bound of range, max = upper bound (None = no upper limit)
@@ -335,6 +339,14 @@ def lambda_handler(event, context):
 
         if not email:
             no_email += 1
+            continue
+
+        broadcast_raw = cf.get(BROADCAST_FIELD)
+        if isinstance(broadcast_raw, list):
+            broadcast_ids = broadcast_raw
+        else:
+            broadcast_ids = [broadcast_raw] if broadcast_raw else []
+        if BROADCAST_NO_ID in broadcast_ids or BROADCAST_HOLD_ID in broadcast_ids:
             continue
 
         person_min, person_max = get_person_ticket_range(cf)
