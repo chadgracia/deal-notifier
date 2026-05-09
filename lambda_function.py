@@ -485,10 +485,10 @@ def lambda_handler(event, context):
             "",
             "─" * 22,
             "",
-            "Unsubscribe or update your buy/sell preferences:",
-            form_url,
-            "",
             "Not an offer to buy or sell securities.",
+            "",
+            "UNSUBSCRIBE OR UPDATE YOUR BUY/SELL PREFERENCES:",
+            form_url,
             "",
             DISCLOSURE,
         ]
