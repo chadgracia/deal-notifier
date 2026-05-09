@@ -78,6 +78,7 @@ BUY_TYPE_ID         = 5077819
 MIN_SIZE_FIELD      = "custom_label_3065488"
 MAX_SIZE_FIELD      = "custom_label_3064645"
 GROSS_FIELD         = "custom_label_3064339"
+NET_FIELD           = "custom_label_3064369"
 STRUCTURE_FIELD     = "custom_label_3064360"
 FUND_STRUCTURE_ID   = 5077906
 DIRECT_STRUCTURE_ID = 6250090
@@ -90,6 +91,10 @@ LAYERS_MAP          = {7000228: "1-Layer", 7000229: "2-Layer", 7000230: "3-Layer
 FIRM_STAGE_ID       = 111800
 INQUIRY_STAGE_ID    = 2109142
 ACTIVE_STAGES       = {FIRM_STAGE_ID, INQUIRY_STAGE_ID}
+
+# TEMPORARY — see indexing loop. Remove together with the noise filter
+# block once the backlog on these names clears.
+NOISY_COMPANIES     = {"anthropic", "anduril", "spacex"}
 
 DISCLOSURE = """--
 DISCLOSURE: Rainmaker Securities, LLC ("RMS") is a FINRA registered broker-dealer and SIPC member. Find this broker-dealer and its agents on BrokerCheck. Our relationship summary can be found on the RMS website (https://www.rainmakersecurities.com/crs).
@@ -333,6 +338,24 @@ def lambda_handler(event, context):
             nexus_ids = [nexus_ids]
         if NEXUS_DIRECT_ID not in nexus_ids:
             continue
+
+        # ── TEMPORARY: noise filter for high-volume companies ─────────────────
+        # Anthropic, Anduril, and SpaceX have a backlog of Inquiry-stage and
+        # priceless deals that clutter the daily digest with inactionable
+        # lines. For these companies only, require Firm + side-appropriate
+        # price (gross for buys, net for sells). Remove this block — and the
+        # NOISY_COMPANIES constant — once the backlog clears.
+        # ──────────────────────────────────────────────────────────────────────
+        if key in NOISY_COMPANIES:
+            if stage_id != FIRM_STAGE_ID:
+                continue
+            if is_sell_deal(deal_cf):
+                if parse_size(deal_cf, NET_FIELD) is None:
+                    continue
+            elif is_buy_deal(deal_cf):
+                if parse_size(deal_cf, GROSS_FIELD) is None:
+                    continue
+
         if is_sell_deal(deal_cf):
             sell_deals_by_name.setdefault(key, []).append(deal)
         elif is_buy_deal(deal_cf):
