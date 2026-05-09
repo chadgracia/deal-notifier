@@ -342,7 +342,7 @@ def lambda_handler(event, context):
             no_email += 1
             continue
 
-        if WHITELIST_TAG_ID not in (person.get("tag_ids") or []):
+        if WHITELIST_TAG_ID not in (person.get("predefined_contacts_tag_ids") or []):
             continue
 
         broadcast_raw = cf.get(BROADCAST_FIELD)
