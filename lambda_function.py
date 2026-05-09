@@ -30,6 +30,9 @@ import time
 import urllib.request
 import urllib.error
 import os
+import hmac
+import hashlib
+import base64
 import boto3
 from datetime import date, datetime, timedelta, timezone
 
@@ -43,10 +46,12 @@ JWT_KEY             = "pipeline-jwt.json"
 SES_SENDER          = "agent@agent.graciagroup.com"
 CHAD_EMAIL          = "cgracia@rainmakersecurities.com"
 TRADES_URL          = "https://trades.graciagroup.com"
+INTEREST_FORM_URL   = "https://mrp5bv4iia7jxjfrvn67tpycsu0jqvny.lambda-url.us-east-1.on.aws/"
 
 DRY_RUN             = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_EMAILS          = int(os.environ.get("MAX_EMAILS", "10"))
 LOOKBACK_HOURS      = int(os.environ["LOOKBACK_HOURS"])
+HMAC_SECRET         = os.environ["HMAC_SECRET"]
 
 # Person fields
 BUYING_FIELD        = "custom_label_3322093"
@@ -150,6 +155,11 @@ def send_email(to_address, subject, body):
             "Body":    {"Text": {"Data": body}}
         }
     )
+
+
+def make_token(person_id):
+    sig = hmac.new(HMAC_SECRET.encode(), str(person_id).encode(), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(sig).decode().rstrip("=")
 
 
 def is_sell_deal(cf):
@@ -450,6 +460,8 @@ def lambda_handler(event, context):
             no_match += 1
             continue
 
+        form_url = f"{INTEREST_FORM_URL.rstrip('/')}/?person_id={person['id']}&token={make_token(person['id'])}"
+
         greeting = first_name or full_name or "there"
         lines = [
             f"Hello {greeting},",
@@ -473,8 +485,8 @@ def lambda_handler(event, context):
             "",
             "─" * 22,
             "",
-            "To update your buy/sell interests, reply to this email.",
-            "To unsubscribe reply with \"unsubscribe\".",
+            "Unsubscribe or update your buy/sell preferences:",
+            form_url,
             "",
             "Not an offer to buy or sell securities.",
             "",
