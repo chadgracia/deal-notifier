@@ -266,6 +266,22 @@ def deal_in_range(deal, person_min, person_max):
     return True
 
 
+def has_whitelisted_tag(person):
+    tags = person.get("tags") or []
+    if isinstance(tags, str):
+        names = [t.strip().lower() for t in tags.split(",")]
+    else:
+        names = []
+        for t in tags:
+            if isinstance(t, str):
+                names.append(t.strip().lower())
+            elif isinstance(t, dict):
+                name = t.get("name") or t.get("tag") or ""
+                if name:
+                    names.append(name.strip().lower())
+    return "whitelisted" in names
+
+
 def load_field_entries(field_id, jwt):
     name_by_entry = {}
     res = call_pipeline_api(f"/admin/person_custom_field_labels/{field_id}.json", jwt)
@@ -339,6 +355,9 @@ def lambda_handler(event, context):
 
         if not email:
             no_email += 1
+            continue
+
+        if not has_whitelisted_tag(person):
             continue
 
         broadcast_raw = cf.get(BROADCAST_FIELD)
