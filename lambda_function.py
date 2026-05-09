@@ -83,11 +83,7 @@ DIRECT_STRUCTURE_ID = 6250090
 NEXUS_FIELD         = "custom_label_3751449"
 NEXUS_DIRECT_ID     = 6460632
 LAYERS_FIELD        = "custom_label_3938743"
-LAYERS_MAP          = {
-    7000228: "SPV on cap table",
-    7000229: "2-Layer",
-    7000230: "3-Layer",
-}
+LAYERS_MAP          = {7000228: "1-Layer", 7000229: "2-Layer", 7000230: "3-Layer"}
 
 # Active deal stages
 FIRM_STAGE_ID       = 111800
@@ -219,9 +215,8 @@ def get_layer(cf):
 
 
 def deal_line(deal):
-    cf        = deal.get("custom_fields", {})
-    side      = "Seller" if is_sell_deal(cf) else "Buyer"
-    structure = get_structure(cf)
+    cf   = deal.get("custom_fields", {})
+    side = "Seller" if is_sell_deal(cf) else "Buyer"
 
     deal_min = parse_size(cf, MIN_SIZE_FIELD)
     deal_max = parse_size(cf, MAX_SIZE_FIELD)
@@ -235,8 +230,12 @@ def deal_line(deal):
         size_str = None
 
     layer = get_layer(cf)
-    parts = [p for p in (size_str, layer, structure) if p]
-    inner = " ".join(parts)
+    if layer:
+        structure_label = f"{layer} SPV"
+    else:
+        structure_label = get_structure(cf)
+
+    inner = f"{size_str} | {structure_label}" if size_str else structure_label
     return f"  New {side} ({inner}) → {TRADES_URL}/deal/{deal['id']}"
 
 
