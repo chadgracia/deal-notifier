@@ -77,6 +77,12 @@ FUND_STRUCTURE_ID   = 5077906
 DIRECT_STRUCTURE_ID = 6250090
 NEXUS_FIELD         = "custom_label_3751449"
 NEXUS_DIRECT_ID     = 6460632
+LAYERS_FIELD        = "custom_label_3938743"
+LAYERS_MAP          = {
+    7000228: "SPV on cap table",
+    7000229: "2-Layer",
+    7000230: "3-Layer",
+}
 
 # Active deal stages
 FIRM_STAGE_ID       = 111800
@@ -170,11 +176,50 @@ def parse_size(cf, field):
         return None
 
 
+def fmt_size(v):
+    if v is None:
+        return None
+    if v >= 1_000_000:
+        n = v / 1_000_000
+        return f"${n:.0f}M" if n == int(n) else f"${n:.1f}M"
+    if v >= 1_000:
+        n = v / 1_000
+        return f"${n:.0f}K" if n == int(n) else f"${n:.1f}K"
+    return f"${int(v)}"
+
+
+def get_layer(cf):
+    raw = cf.get(LAYERS_FIELD)
+    if isinstance(raw, list):
+        raw = raw[0] if raw else None
+    if raw is None:
+        return None
+    try:
+        return LAYERS_MAP.get(int(float(str(raw))))
+    except Exception:
+        return None
+
+
 def deal_line(deal):
     cf        = deal.get("custom_fields", {})
     side      = "Seller" if is_sell_deal(cf) else "Buyer"
     structure = get_structure(cf)
-    return f"  New {side} ({structure}) → {TRADES_URL}/deal/{deal['id']}"
+
+    deal_min = parse_size(cf, MIN_SIZE_FIELD)
+    deal_max = parse_size(cf, MAX_SIZE_FIELD)
+    if deal_min is not None and deal_max is not None:
+        size_str = f"{fmt_size(deal_min)}–{fmt_size(deal_max)}"
+    elif deal_min is not None:
+        size_str = f"Min {fmt_size(deal_min)}"
+    elif deal_max is not None:
+        size_str = f"Max {fmt_size(deal_max)}"
+    else:
+        size_str = None
+
+    layer = get_layer(cf)
+    parts = [p for p in (size_str, layer, structure) if p]
+    inner = " ".join(parts)
+    return f"  New {side} ({inner}) → {TRADES_URL}/deal/{deal['id']}"
 
 
 def get_person_ticket_range(cf):
