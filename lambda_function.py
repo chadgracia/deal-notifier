@@ -94,6 +94,19 @@ FIRM_STAGE_ID       = 111800
 INQUIRY_STAGE_ID    = 2109142
 ACTIVE_STAGES       = {FIRM_STAGE_ID, INQUIRY_STAGE_ID}
 
+DISCLOSURE = """--
+DISCLOSURE: Rainmaker Securities, LLC ("RMS") is a FINRA registered broker-dealer and SIPC member. Find this broker-dealer and its agents on BrokerCheck. Our relationship summary can be found on the RMS website (https://www.rainmakersecurities.com/crs).
+
+RMS is engaged by its clients to make referrals to buyers or sellers of private securities ("Securities"). If such client closes a Securities transaction with a buyer or seller so referred, RMS is entitled to a success fee from the client. Such success fee may be in the form of cash or in warrants to purchase securities of the client or client's affiliate. RMS or RMS representatives may hold equity in its issuer clients or in the issuers of securities purchased or sold by the parties to a transaction.
+
+This communication is confidential and is addressed only to its intended recipient. This communication does not represent an offer or solicitation to buy or sell Securities. Such an offer must be made via definitive legal documentation by the seller of securities.
+
+Investments in the Securities are speculative and involve a high degree of risk. An investor in the Securities should have little to no need for liquidity in the foreseeable future and have sufficient finances to withstand the loss of the entire investment.
+
+RMS does not recommend the purchase or sale of Securities. Potential buyers or sellers of the Securities should seek professional counsel prior to entering into any transaction.
+
+RISK FACTORS: Investments in the Securities are speculative and involve a high degree of risk. Companies engaging in private placements may be early stage and high risk. You should be able to afford the increased risk of loss with such investments, including the potential of a total loss. An investor in the Securities should have little to no need for liquidity in the foreseeable future. Unlike an investment purchased on a stock exchange, an investment in a private placement is highly illiquid. You will most likely be investing in restricted securities, may have difficulty finding a buyer for the securities when you can resell and, as a result, may need to hold the securities indefinitely. Limited disclosure: Companies engaging in private placements are not required to provide the disclosure that would be required in a registered offering. Potential buyers or sellers of the Securities should seek professional counsel prior to entering into any transaction."""
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -412,6 +425,8 @@ def lambda_handler(event, context):
             "To unsubscribe reply with \"unsubscribe\".",
             "",
             "Not an offer to buy or sell securities.",
+            "",
+            DISCLOSURE,
         ]
 
         body    = "\n".join(lines)
