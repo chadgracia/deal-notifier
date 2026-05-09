@@ -254,7 +254,10 @@ def deal_line(deal):
     deal_min = parse_size(cf, MIN_SIZE_FIELD)
     deal_max = parse_size(cf, MAX_SIZE_FIELD)
     if deal_min is not None and deal_max is not None:
-        size_str = f"{fmt_size(deal_min)}–{fmt_size(deal_max)}"
+        if deal_min == deal_max:
+            size_str = fmt_size(deal_min)
+        else:
+            size_str = f"{fmt_size(deal_min)}–{fmt_size(deal_max)}"
     elif deal_min is not None:
         size_str = f"Min {fmt_size(deal_min)}"
     elif deal_max is not None:
