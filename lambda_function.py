@@ -31,7 +31,7 @@ import urllib.request
 import urllib.error
 import os
 import boto3
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -46,6 +46,7 @@ TRADES_URL          = "https://trades.graciagroup.com"
 
 DRY_RUN             = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_EMAILS          = int(os.environ.get("MAX_EMAILS", "10"))
+LOOKBACK_HOURS      = int(os.environ["LOOKBACK_HOURS"])
 
 # Person fields
 BUYING_FIELD        = "custom_label_3322093"
@@ -182,6 +183,22 @@ def get_structure(cf):
         return "Other"
 
 
+def parse_pipeline_ts(s):
+    if not s:
+        return None
+    for fmt in ("%Y/%m/%d %H:%M:%S %z", "%Y-%m-%d %H:%M:%S %z",
+                "%Y/%m/%d %H:%M:%S",    "%Y-%m-%d %H:%M:%S"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
 def parse_size(cf, field):
     """Returns deal size field as float, or None if missing/zero."""
     v = cf.get(field)
@@ -305,8 +322,10 @@ def load_field_entries(field_id, jwt):
 # ── Main handler ──────────────────────────────────────────────────────────────
 
 def lambda_handler(event, context):
-    today = date.today().strftime("%B %d, %Y")
-    jwt   = get_jwt()
+    today  = date.today().strftime("%B %d, %Y")
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
+    logger.info(f"Recency filter: lookback={LOOKBACK_HOURS}h, cutoff={cutoff.isoformat()}")
+    jwt    = get_jwt()
 
     # Load snapshots
     logger.info("Loading snapshots")
@@ -333,6 +352,11 @@ def lambda_handler(event, context):
             continue
         key = company_name.lower()
         deal_cf = deal.get("custom_fields", {})
+
+        updated = parse_pipeline_ts(deal.get("updated_at"))
+        if updated is None or updated < cutoff:
+            continue
+
         nexus_ids = deal_cf.get(NEXUS_FIELD) or []
         if not isinstance(nexus_ids, list):
             nexus_ids = [nexus_ids]
