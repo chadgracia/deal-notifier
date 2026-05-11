@@ -148,12 +148,13 @@ def load_snapshot(key):
 def send_email(to_address, subject, body):
     ses = boto3.client("ses", region_name="us-east-1")
     ses.send_email(
-        Source=SES_SENDER,
+        Source=f'"Chad Gracia / Gracia Group" <{SES_SENDER}>',
         Destination={"ToAddresses": [to_address]},
         Message={
             "Subject": {"Data": subject},
             "Body":    {"Text": {"Data": body}}
-        }
+        },
+        ReplyToAddresses=[CHAD_EMAIL],
     )
 
 
@@ -488,6 +489,9 @@ def lambda_handler(event, context):
             "",
             "─" * 22,
             "",
+            "Questions about anything in this digest? Reply to this email or "
+            "write directly to cgracia@rainmakersecurities.com.",
+            "",
             "Not an offer to buy or sell securities.",
             "",
             "UNSUBSCRIBE OR UPDATE YOUR BUY/SELL PREFERENCES:",
@@ -497,7 +501,7 @@ def lambda_handler(event, context):
         ]
 
         body    = "\n".join(lines)
-        subject = f"New activity on trades you are following — {today}"
+        subject = f"Gracia Group — New activity on trades you are following — {today}"
 
         if DRY_RUN:
             header = (
