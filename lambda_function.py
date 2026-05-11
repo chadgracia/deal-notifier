@@ -489,9 +489,6 @@ def lambda_handler(event, context):
             "",
             "─" * 22,
             "",
-            "Questions about anything in this digest? Reply to this email or "
-            "write directly to cgracia@rainmakersecurities.com.",
-            "",
             "Not an offer to buy or sell securities.",
             "",
             "UNSUBSCRIBE OR UPDATE YOUR BUY/SELL PREFERENCES:",
