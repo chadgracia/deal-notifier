@@ -100,7 +100,7 @@ ACTIVE_STAGES       = {FIRM_STAGE_ID, INQUIRY_STAGE_ID}
 
 # TEMPORARY — see indexing loop. Remove together with the noise filter
 # block once the backlog on these names clears.
-NOISY_COMPANIES     = {"anthropic", "anduril", "spacex"}
+NOISY_COMPANIES     = {"anthropic"}
 
 DISCLOSURE = """--
 DISCLOSURE: Rainmaker Securities, LLC ("RMS") is a FINRA registered broker-dealer and SIPC member. Find this broker-dealer and its agents on BrokerCheck. Our relationship summary can be found on the RMS website (https://www.rainmakersecurities.com/crs).
@@ -401,6 +401,8 @@ def lambda_handler(event, context):
         # deals with no type set are skipped
 
     logger.info(f"Deal index: {len(sell_deals_by_name)} sell, {len(buy_deals_by_name)} buy companies")
+    logger.info(f"Sell companies: {sorted(sell_deals_by_name.keys())}")
+    logger.info(f"Buy companies:  {sorted(buy_deals_by_name.keys())}")
 
     # Process each person
     emails_sent = 0
