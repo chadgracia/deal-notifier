@@ -88,6 +88,9 @@ NET_FIELD           = "custom_label_3064369"
 STRUCTURE_FIELD     = "custom_label_3064360"
 FUND_STRUCTURE_ID   = 5077906
 DIRECT_STRUCTURE_ID = 6250090
+FORWARD_STRUCTURE_ID = 5077903
+ACCEPTS_FIELD       = "custom_label_3998063"
+ACCEPTS_FORWARDS_ID = 7177776
 NEXUS_FIELD         = "custom_label_3751449"
 NEXUS_DIRECT_ID     = 6460632
 LAYERS_FIELD        = "custom_label_3938743"
@@ -192,6 +195,32 @@ def get_structure(cf):
         return "Other"
     except Exception:
         return "Other"
+
+
+def deal_is_forward_only(deal):
+    """True if the deal's structure is Forward and nothing else."""
+    raw = (deal.get("custom_fields", {}) or {}).get(STRUCTURE_FIELD)
+    ids = raw if isinstance(raw, list) else ([raw] if raw else [])
+    parsed = []
+    for v in ids:
+        try:
+            parsed.append(int(float(str(v))))
+        except Exception:
+            continue
+    return parsed == [FORWARD_STRUCTURE_ID]
+
+
+def person_accepts_forwards(cf):
+    """True if the person's Accepts field includes Forwards."""
+    raw = cf.get(ACCEPTS_FIELD)
+    ids = raw if isinstance(raw, list) else ([raw] if raw else [])
+    for v in ids:
+        try:
+            if int(float(str(v))) == ACCEPTS_FORWARDS_ID:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def parse_pipeline_ts(s):
@@ -445,6 +474,7 @@ def lambda_handler(event, context):
             matches = [
                 d for d in sell_deals_by_name.get(sec_name.lower(), [])
                 if deal_in_range(d, person_min, person_max)
+                and not (deal_is_forward_only(d) and not person_accepts_forwards(cf))
             ]
             if matches:
                 sell_opps[sec_name] = matches
@@ -458,6 +488,7 @@ def lambda_handler(event, context):
             matches = [
                 d for d in buy_deals_by_name.get(sec_name.lower(), [])
                 if deal_in_range(d, person_min, person_max)
+                and not (deal_is_forward_only(d) and not person_accepts_forwards(cf))
             ]
             if matches:
                 buy_opps[sec_name] = matches
