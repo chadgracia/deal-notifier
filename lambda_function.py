@@ -52,6 +52,8 @@ DRY_RUN             = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_EMAILS          = int(os.environ.get("MAX_EMAILS", "10"))
 LOOKBACK_HOURS      = int(os.environ["LOOKBACK_HOURS"])
 HMAC_SECRET         = os.environ["HMAC_SECRET"]
+PORTFOLIO_URL         = "https://jtm2stbnfelfoabi3yvyvyqovu0wxahu.lambda-url.us-east-1.on.aws"
+PORTFOLIO_HMAC_SECRET = os.environ["PORTFOLIO_HMAC_SECRET"]
 
 # Person fields
 BUYING_FIELD        = "custom_label_3322093"
@@ -164,6 +166,66 @@ def send_email(to_address, subject, body):
 def make_token(person_id):
     sig = hmac.new(HMAC_SECRET.encode(), str(person_id).encode(), hashlib.sha256).digest()
     return base64.urlsafe_b64encode(sig).decode().rstrip("=")
+
+
+def make_portfolio_token(person_id):
+    """Magic-link token for the portfolio/auction site (signed with ITS secret)."""
+    sig = hmac.new(PORTFOLIO_HMAC_SECRET.encode(), str(person_id).encode(),
+                   hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(sig).decode().rstrip("=")
+
+
+def _auction_base_name(name):
+    """Company name with any parenthetical stripped, normalised:
+    '1X (Norwegian HoldCo)' -> '1x'. Lets bare interest labels match holdcos."""
+    out, depth = [], 0
+    for ch in str(name or ""):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            out.append(ch)
+    return " ".join("".join(out).split()).strip().lower()
+
+
+def load_live_auctions():
+    """Open auctions from auctions.json, each annotated with its current top bid.
+    Live = no close date, or close date today or later. Never raises."""
+    s3 = boto3.client("s3")
+    try:
+        obj = s3.get_object(Bucket=SNAPSHOT_BUCKET, Key="auctions.json")
+        auctions = (json.loads(obj["Body"].read()) or {}).get("auctions") or {}
+    except Exception as e:
+        logger.info(f"auctions.json not loaded: {e}")
+        return []
+    today_str = date.today().isoformat()
+    live = []
+    for aid, auc in auctions.items():
+        close = (auc.get("close_date") or "").strip()
+        if close and close < today_str:
+            continue
+        company = (auc.get("company") or "").strip()
+        if not company:
+            continue
+        top = None
+        try:
+            bobj = s3.get_object(Bucket=SNAPSHOT_BUCKET,
+                                 Key=f"bids/auction_{aid}.json")
+            bids = (json.loads(bobj["Body"].read()) or {}).get("bids") or {}
+            for b in bids.values():
+                try:
+                    g = float(str(b.get("gross")).replace(",", ""))
+                except (TypeError, ValueError):
+                    continue
+                if top is None or g > top:
+                    top = g
+        except Exception:
+            pass
+        live.append({"id": str(aid), "company": company,
+                     "close_date": close, "top": top})
+    logger.info(f"Live auctions: {[(a['company'], a['id']) for a in live]}")
+    return live
 
 
 def is_sell_deal(cf):
@@ -382,6 +444,7 @@ def lambda_handler(event, context):
     logger.info("Loading interest field mappings")
     buying_name_by_entry  = load_field_entries(3322093, jwt)
     selling_name_by_entry = load_field_entries(3759156, jwt)
+    live_auctions = load_live_auctions()
 
     # Build deal index by company name
     sell_deals_by_name = {}
@@ -517,6 +580,34 @@ def lambda_handler(event, context):
             lines.append(sec_name)
             for d in buy_opps[sec_name]:
                 lines.append(deal_line(d))
+
+        my_buy_names = set()
+        for entry_id in (cf.get(BUYING_FIELD) or []):
+            nm = buying_name_by_entry.get(entry_id, "")
+            if nm:
+                my_buy_names.add(_auction_base_name(nm))
+        auction_lines = []
+        for a in live_auctions:
+            if _auction_base_name(a["company"]) not in my_buy_names:
+                continue
+            link = (f"{PORTFOLIO_URL}/?client={person['id']}"
+                    f"&token={make_portfolio_token(person['id'])}"
+                    f"&view=auction&id={a['id']}")
+            bits = []
+            if a["top"] is not None:
+                bits.append(f"top bid ${a['top']:,.2f}")
+            if a["close_date"]:
+                bits.append(f"bids close {a['close_date']}")
+            detail = " | ".join(bits) if bits else "no bids yet"
+            auction_lines.append("")
+            auction_lines.append(f"{a['company']} — LIVE AUCTION ({detail})")
+            auction_lines.append(f"  Place or raise a bid → {link}")
+        if auction_lines:
+            lines.append("")
+            lines.append("─" * 22)
+            lines.append("")
+            lines.append("LIVE AUCTIONS you can bid on now:")
+            lines += auction_lines
 
         lines += [
             "",
