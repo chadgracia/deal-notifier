@@ -53,7 +53,7 @@ MAX_EMAILS          = int(os.environ.get("MAX_EMAILS", "10"))
 LOOKBACK_HOURS      = int(os.environ["LOOKBACK_HOURS"])
 HMAC_SECRET         = os.environ["HMAC_SECRET"]
 PORTFOLIO_URL         = "https://jtm2stbnfelfoabi3yvyvyqovu0wxahu.lambda-url.us-east-1.on.aws"
-PORTFOLIO_HMAC_SECRET = os.environ["PORTFOLIO_HMAC_SECRET"]
+PORTFOLIO_HMAC_SECRET = "D8mxQTEKuLfsbRsCuTX5qMAuQtAx8EngAAlTRzmJTmM"
 
 # Person fields
 BUYING_FIELD        = "custom_label_3322093"
