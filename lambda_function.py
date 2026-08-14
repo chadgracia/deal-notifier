@@ -424,9 +424,204 @@ def load_field_entries(field_id, jwt):
     return name_by_entry
 
 
+# ── Admin table (manual alerts) ───────────────────────────────────────────────
+
+ADMIN_KEY      = "JK8h5Pq2L9aZ7rT3mN6bX"
+ALERTS_LOG_KEY = "notifier-alerts.json"
+
+
+def load_alert_history():
+    """{deal_id_str: {"last_alerted": iso_ts, "recipients_count": int}} — never raises."""
+    s3 = boto3.client("s3")
+    try:
+        obj = s3.get_object(Bucket=SNAPSHOT_BUCKET, Key=ALERTS_LOG_KEY)
+        return json.loads(obj["Body"].read()) or {}
+    except Exception:
+        return {}
+
+
+def find_matches_for_deal(deal, all_people, buying_name_by_entry, selling_name_by_entry):
+    """People who would be alerted for this deal, using the same rules as the digest:
+    whitelist tag, broadcast not No/Hold, has email, interest matches company,
+    ticket range fits, forward-only deals require Accepts Forwards."""
+    cf_deal = deal.get("custom_fields", {})
+    company = ((deal.get("company") or {}).get("name") or "").strip().lower()
+    if not company:
+        return []
+    if is_sell_deal(cf_deal):
+        interest_field, name_map = BUYING_FIELD, buying_name_by_entry
+    elif is_buy_deal(cf_deal):
+        interest_field, name_map = SELLING_FIELD, selling_name_by_entry
+    else:
+        return []
+    fwd_only = deal_is_forward_only(deal)
+    matches = []
+    for person in all_people:
+        email = (person.get("email") or "").strip()
+        if not email:
+            continue
+        if WHITELIST_TAG_ID not in (person.get("predefined_contacts_tag_ids") or []):
+            continue
+        cf = person.get("custom_fields", {})
+        braw = cf.get(BROADCAST_FIELD)
+        bids = braw if isinstance(braw, list) else ([braw] if braw else [])
+        if BROADCAST_NO_ID in bids or BROADCAST_HOLD_ID in bids:
+            continue
+        names = set()
+        for eid in (cf.get(interest_field) or []):
+            nm = name_map.get(eid, "")
+            if nm:
+                names.add(nm.strip().lower())
+        if company not in names:
+            continue
+        pmin, pmax = get_person_ticket_range(cf)
+        if not deal_in_range(deal, pmin, pmax):
+            continue
+        if fwd_only and not person_accepts_forwards(cf):
+            continue
+        matches.append(person)
+    return matches
+
+
+def deal_summary(deal):
+    """Compact 'Seller | $1M–$5M | Direct @ $85.00' style string."""
+    cf   = deal.get("custom_fields", {})
+    side = "Seller" if is_sell_deal(cf) else ("Buyer" if is_buy_deal(cf) else "?")
+    dmin = parse_size(cf, MIN_SIZE_FIELD)
+    dmax = parse_size(cf, MAX_SIZE_FIELD)
+    if dmin is not None and dmax is not None:
+        size_str = fmt_size(dmin) if dmin == dmax else f"{fmt_size(dmin)}–{fmt_size(dmax)}"
+    elif dmin is not None:
+        size_str = f"Min {fmt_size(dmin)}"
+    elif dmax is not None:
+        size_str = f"Max {fmt_size(dmax)}"
+    else:
+        size_str = ""
+    layer = get_layer(cf)
+    structure = f"{layer} SPV" if layer else get_structure(cf)
+    gross = parse_size(cf, GROSS_FIELD)
+    price = f" @ ${gross:,.2f}" if gross is not None else ""
+    parts = [side]
+    if size_str:
+        parts.append(size_str)
+    parts.append(f"{structure}{price}")
+    return " | ".join(parts)
+
+
+ADMIN_CSS = """
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+       margin: 24px; background: #f7f8fa; color: #1a1a2e; }
+h1 { font-size: 20px; }
+table { border-collapse: collapse; width: 100%; background: #fff;
+        box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+th, td { padding: 8px 12px; border-bottom: 1px solid #e5e7eb;
+         text-align: left; font-size: 13px; }
+th { background: #111827; color: #fff; position: sticky; top: 0; }
+tr:hover td { background: #f0f4ff; }
+.num { text-align: right; }
+.muted { color: #9ca3af; }
+button.alert-btn { background: #cbd5e1; color: #64748b; border: none;
+                   padding: 5px 10px; border-radius: 5px; cursor: not-allowed; }
+a { color: #2563eb; text-decoration: none; }
+"""
+
+
+def render_admin_table(event):
+    qs  = event.get("queryStringParameters") or {}
+    if qs.get("key") != ADMIN_KEY:
+        return {"statusCode": 403,
+                "headers": {"Content-Type": "text/plain"},
+                "body": "Forbidden"}
+
+    jwt         = get_jwt()
+    deals_data  = load_snapshot("deals.json")
+    people_data = load_snapshot("people.json")
+    all_deals   = deals_data.get("deals", [])
+    all_people  = people_data.get("people", [])
+    buying_name_by_entry  = load_field_entries(3322093, jwt)
+    selling_name_by_entry = load_field_entries(3759156, jwt)
+    history     = load_alert_history()
+
+    rows = []
+    for deal in all_deals:
+        stage_id = (deal.get("deal_stage") or {}).get("id")
+        if stage_id not in ACTIVE_STAGES or deal.get("is_archived"):
+            continue
+        cf = deal.get("custom_fields", {})
+        nexus_ids = cf.get(NEXUS_FIELD) or []
+        if not isinstance(nexus_ids, list):
+            nexus_ids = [nexus_ids]
+        if NEXUS_DIRECT_ID not in nexus_ids:
+            continue
+        company = ((deal.get("company") or {}).get("name") or "").strip()
+        if not company:
+            continue
+        updated = parse_pipeline_ts(deal.get("updated_at"))
+        matches = find_matches_for_deal(deal, all_people,
+                                        buying_name_by_entry, selling_name_by_entry)
+        hist = history.get(str(deal["id"])) or {}
+        rows.append({
+            "id": deal["id"],
+            "company": company,
+            "summary": deal_summary(deal),
+            "stage": "Firm" if stage_id == FIRM_STAGE_ID else "Inquiry",
+            "updated": updated,
+            "updated_str": (deal.get("updated_at") or "")[:16],
+            "match_count": len(matches),
+            "last_alerted": (hist.get("last_alerted") or "")[:16],
+            "sent_count": hist.get("recipients_count"),
+        })
+
+    rows.sort(key=lambda r: r["updated"] or datetime.min.replace(tzinfo=timezone.utc),
+              reverse=True)
+    rows = rows[:150]
+
+    body_rows = []
+    for r in rows:
+        sent = "" if r["sent_count"] is None else str(r["sent_count"])
+        last = r["last_alerted"] or '<span class="muted">never</span>'
+        body_rows.append(
+            f"<tr>"
+            f"<td><a href='{TRADES_URL}/deal/{r['id']}' target='_blank'>{r['company']}</a></td>"
+            f"<td>{r['stage']}</td>"
+            f"<td>{r['summary']}</td>"
+            f"<td>{r['updated_str']}</td>"
+            f"<td class='num'>{r['match_count']}</td>"
+            f"<td>{last}</td>"
+            f"<td class='num'>{sent}</td>"
+            f"<td><button class='alert-btn' disabled "
+            f"title='Send path coming in Step 2'>Alert counterparties</button></td>"
+            f"</tr>"
+        )
+
+    html = (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<title>Deal Notifier — Admin</title>"
+        "<style>" + ADMIN_CSS + "</style></head><body>"
+        "<h1>Deal Notifier — Manual Alerts</h1>"
+        f"<p class='muted'>{len(rows)} active direct deals, newest first. "
+        "Match counts use the same rules as the digest "
+        "(whitelist, broadcast, interests, ticket size, forwards).</p>"
+        "<table><tr><th>Company</th><th>Stage</th><th>Deal</th><th>Updated</th>"
+        "<th>Matches</th><th>Last alerted</th><th>Sent</th><th></th></tr>"
+        + "".join(body_rows) +
+        "</table></body></html>"
+    )
+    return {"statusCode": 200,
+            "headers": {"Content-Type": "text/html; charset=utf-8"},
+            "body": html}
+
+
 # ── Main handler ──────────────────────────────────────────────────────────────
 
 def lambda_handler(event, context):
+    method = ((event.get("requestContext") or {}).get("http") or {}).get("method")
+    if method:
+        return render_admin_table(event)
+    return run_digest(event, context)
+
+
+def run_digest(event, context):
     today  = date.today().strftime("%B %d, %Y")
     cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
     logger.info(f"Recency filter: lookback={LOOKBACK_HOURS}h, cutoff={cutoff.isoformat()}")
