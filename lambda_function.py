@@ -577,7 +577,8 @@ def handle_alert_post(event):
 
     # Idempotency lock: one alert per deal per day; blocks double-clicks and bots.
     s3 = boto3.client("s3")
-    lock_key = f"alert-locks/{deal_id}/{date.today().isoformat()}.lock"
+    lock_suffix = "-dry" if DRY_RUN else ""
+    lock_key = f"alert-locks/{deal_id}/{date.today().isoformat()}{lock_suffix}.lock"
     try:
         s3.put_object(Bucket=SNAPSHOT_BUCKET, Key=lock_key,
                       Body=b"1", IfNoneMatch="*")
