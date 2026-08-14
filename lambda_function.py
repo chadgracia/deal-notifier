@@ -34,6 +34,8 @@ import hmac
 import hashlib
 import base64
 import boto3
+from html import escape as h_escape
+from urllib.parse import parse_qs
 from datetime import date, datetime, timedelta, timezone
 
 logger = logging.getLogger()
@@ -440,6 +442,214 @@ def load_alert_history():
         return {}
 
 
+def save_alert_history(history):
+    s3 = boto3.client("s3")
+    s3.put_object(Bucket=SNAPSHOT_BUCKET, Key=ALERTS_LOG_KEY,
+                  Body=json.dumps(history).encode(),
+                  ContentType="application/json")
+
+
+def parse_post_body(event):
+    body = event.get("body") or ""
+    if event.get("isBase64Encoded"):
+        body = base64.b64decode(body).decode()
+    params = parse_qs(body)
+    return {k: v[0] for k, v in params.items()}
+
+
+def fetch_live_deal(deal_id, jwt):
+    res = call_pipeline_api(f"/deals/{deal_id}.json", jwt)
+    if res["status"] != 200:
+        return None
+    data = res["data"]
+    if isinstance(data, dict):
+        if isinstance(data.get("deal"), dict):
+            return data["deal"]
+        if "id" in data:
+            return data
+    return None
+
+
+def simple_page(title, inner):
+    page = ("<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + title +
+            "</title><style>" + ADMIN_CSS + "</style></head><body><h1>" + title +
+            "</h1>" + inner + "</body></html>")
+    return {"statusCode": 200,
+            "headers": {"Content-Type": "text/html; charset=utf-8"},
+            "body": page}
+
+
+def recipients_table_html(recipients):
+    rows = []
+    for r in recipients:
+        rows.append(
+            "<tr><td>" + h_escape(r.get("name") or "") + "</td>"
+            "<td>" + h_escape(r.get("company") or "") + "</td>"
+            "<td>" + h_escape(r.get("email") or "") + "</td></tr>"
+        )
+    return ("<table><tr><th>Name</th><th>Company</th><th>Email</th></tr>"
+            + "".join(rows) + "</table>")
+
+
+def render_recipient_report(company, deal_id, recipients, was_dry):
+    mode = ""
+    if was_dry:
+        mode = ("<p><b>DRY RUN</b> — all emails were routed to " + CHAD_EMAIL +
+                ". These are the people who WOULD have received it:</p>")
+    inner = (
+        f"<p>Alert sent for <b>{h_escape(company)}</b> (deal {deal_id}) — "
+        f"{len(recipients)} recipient(s).</p>"
+        + mode + recipients_table_html(recipients)
+        + f"<p><a href='?key={ADMIN_KEY}'>&larr; Back to deals table</a></p>"
+    )
+    return simple_page("Alert report", inner)
+
+
+def render_recipients_view(event):
+    qs = event.get("queryStringParameters") or {}
+    if qs.get("key") != ADMIN_KEY:
+        return {"statusCode": 403,
+                "headers": {"Content-Type": "text/plain"},
+                "body": "Forbidden"}
+    deal_id = qs.get("deal_id", "")
+    hist = load_alert_history().get(str(deal_id))
+    if not hist:
+        return simple_page("No record",
+            f"<p>No alert history for deal {h_escape(deal_id)}.</p>"
+            f"<p><a href='?key={ADMIN_KEY}'>&larr; Back</a></p>")
+    mode = " (DRY RUN — routed to Chad)" if hist.get("dry_run") else ""
+    inner = (
+        f"<p><b>{h_escape(hist.get('company') or '')}</b> — deal {h_escape(deal_id)}<br>"
+        f"Alerted {h_escape((hist.get('last_alerted') or '')[:16])}{mode} — "
+        f"{hist.get('recipients_count')} recipient(s).</p>"
+        + recipients_table_html(hist.get("recipients") or [])
+        + f"<p><a href='?key={ADMIN_KEY}'>&larr; Back to deals table</a></p>"
+    )
+    return simple_page("Alert recipients", inner)
+
+
+def handle_alert_post(event):
+    form = parse_post_body(event)
+    if form.get("key") != ADMIN_KEY:
+        return {"statusCode": 403,
+                "headers": {"Content-Type": "text/plain"},
+                "body": "Forbidden"}
+    try:
+        deal_id = int(form.get("deal_id", ""))
+    except ValueError:
+        return simple_page("Error", "<p>Missing or invalid deal_id.</p>")
+
+    jwt  = get_jwt()
+    deal = fetch_live_deal(deal_id, jwt)
+    if deal is None:
+        return simple_page("Error",
+            f"<p>Could not fetch deal {deal_id} live from Pipeline. Nothing sent.</p>")
+
+    stage_id = (deal.get("deal_stage") or {}).get("id")
+    if stage_id not in ACTIVE_STAGES or deal.get("is_archived"):
+        return simple_page("Not sent",
+            f"<p>Deal {deal_id} is no longer in an active stage. Nothing sent.</p>")
+
+    company = ((deal.get("company") or {}).get("name") or "").strip()
+    people_data = load_snapshot("people.json")
+    all_people  = people_data.get("people", [])
+    buying_name_by_entry  = load_field_entries(3322093, jwt)
+    selling_name_by_entry = load_field_entries(3759156, jwt)
+    matches = find_matches_for_deal(deal, all_people,
+                                    buying_name_by_entry, selling_name_by_entry)
+    if not matches:
+        return simple_page("Not sent",
+            f"<p>No counterparty matches for {h_escape(company)} "
+            f"(deal {deal_id}). Nothing sent.</p>")
+
+    # Idempotency lock: one alert per deal per day; blocks double-clicks and bots.
+    s3 = boto3.client("s3")
+    lock_key = f"alert-locks/{deal_id}/{date.today().isoformat()}.lock"
+    try:
+        s3.put_object(Bucket=SNAPSHOT_BUCKET, Key=lock_key,
+                      Body=b"1", IfNoneMatch="*")
+    except Exception as e:
+        if "PreconditionFailed" in str(e) or "412" in str(e):
+            return simple_page("Already sent",
+                f"<p>An alert for deal {deal_id} was already sent today. "
+                f"Nothing sent.</p>"
+                f"<p><a href='?key={ADMIN_KEY}'>&larr; Back</a></p>")
+        return simple_page("Error",
+            f"<p>Lock error: {h_escape(str(e))}. Nothing sent.</p>")
+
+    today   = date.today().strftime("%B %d, %Y")
+    subject = f"Gracia Group — New activity on {company} — {today}"
+    recipients = []
+    for person in matches:
+        email      = (person.get("email") or "").strip()
+        first_name = (person.get("first_name") or "").strip()
+        full_name  = f"{first_name} {(person.get('last_name') or '')}".strip()
+        greeting   = first_name or full_name or "there"
+        form_url   = f"{INTEREST_FORM_URL.rstrip('/')}/?person_id={person['id']}&token={make_token(person['id'])}"
+        lines = [
+            f"Hello {greeting},",
+            "",
+            "New activity on a trade you are following:",
+            "",
+            company,
+            deal_line(deal),
+            "",
+            "─" * 22,
+            "",
+            "Not an offer to buy or sell securities.",
+            "",
+            "UNSUBSCRIBE OR UPDATE YOUR BUY/SELL PREFERENCES:",
+            form_url,
+            "",
+            DISCLOSURE,
+        ]
+        body = "\n".join(lines)
+        if DRY_RUN:
+            header = f"[DRY RUN] Real recipient: {email} ({full_name})\n\n"
+            send_email(CHAD_EMAIL, f"[DRY RUN] {subject}", header + body)
+        else:
+            send_email(email, subject, body)
+        time.sleep(0.5)
+        recipients.append({
+            "name": full_name or "(no name)",
+            "company": (person.get("company_name") or "").strip(),
+            "email": email,
+        })
+        logger.info(f"{'[DRY] ' if DRY_RUN else ''}Alert deal {deal_id} -> {email}")
+
+    history = load_alert_history()
+    history[str(deal_id)] = {
+        "last_alerted": datetime.now(timezone.utc).isoformat(),
+        "recipients_count": len(recipients),
+        "dry_run": DRY_RUN,
+        "company": company,
+        "recipients": recipients,
+    }
+    save_alert_history(history)
+
+    return render_recipient_report(company, deal_id, recipients, DRY_RUN)
+
+
+ADMIN_JS = """
+function alertCounterparties(dealId, company, matches) {
+  var msg = "Send alert for " + company + " to " + matches + " counterpart" +
+            (matches === 1 ? "y" : "ies") + "?";
+  if (!confirm(msg)) { return; }
+  var f = document.createElement("form");
+  f.method = "POST";
+  f.action = window.location.pathname;
+  var k = document.createElement("input");
+  k.type = "hidden"; k.name = "key"; k.value = ADMIN_KEY_JS;
+  f.appendChild(k);
+  var d = document.createElement("input");
+  d.type = "hidden"; d.name = "deal_id"; d.value = dealId;
+  f.appendChild(d);
+  document.body.appendChild(f);
+  f.submit();
+}
+"""
+
+
 def find_matches_for_deal(deal, all_people, buying_name_by_entry, selling_name_by_entry):
     """People who would be alerted for this deal, using the same rules as the digest:
     whitelist tag, broadcast not No/Hold, has email, interest matches company,
@@ -520,8 +730,9 @@ th { background: #111827; color: #fff; position: sticky; top: 0; }
 tr:hover td { background: #f0f4ff; }
 .num { text-align: right; }
 .muted { color: #9ca3af; }
-button.alert-btn { background: #cbd5e1; color: #64748b; border: none;
-                   padding: 5px 10px; border-radius: 5px; cursor: not-allowed; }
+button.alert-btn { background: #2563eb; color: #fff; border: none;
+                   padding: 5px 10px; border-radius: 5px; cursor: pointer; }
+button.alert-btn:hover { background: #1d4ed8; }
 a { color: #2563eb; text-decoration: none; }
 """
 
@@ -570,6 +781,7 @@ def render_admin_table(event):
             "match_count": len(matches),
             "last_alerted": (hist.get("last_alerted") or "")[:16],
             "sent_count": hist.get("recipients_count"),
+            "was_dry": bool(hist.get("dry_run")),
         })
 
     rows.sort(key=lambda r: r["updated"] or datetime.min.replace(tzinfo=timezone.utc),
@@ -578,26 +790,37 @@ def render_admin_table(event):
 
     body_rows = []
     for r in rows:
-        sent = "" if r["sent_count"] is None else str(r["sent_count"])
+        comp = h_escape(r["company"])
+        summ = h_escape(r["summary"])
+        if r["sent_count"] is None:
+            sent_cell = ""
+        else:
+            dry_tag = " (dry)" if r["was_dry"] else ""
+            sent_cell = (f"<a href='?key={ADMIN_KEY}&view=recipients&deal_id={r['id']}'>"
+                         f"{r['sent_count']}{dry_tag}</a>")
         last = r["last_alerted"] or '<span class="muted">never</span>'
+        onclick_company = h_escape(json.dumps(r["company"]), quote=True)
         body_rows.append(
             f"<tr>"
-            f"<td><a href='{TRADES_URL}/deal/{r['id']}' target='_blank'>{r['company']}</a></td>"
+            f"<td><a href='{TRADES_URL}/deal/{r['id']}' target='_blank'>{comp}</a></td>"
             f"<td>{r['stage']}</td>"
-            f"<td>{r['summary']}</td>"
+            f"<td>{summ}</td>"
             f"<td>{r['updated_str']}</td>"
             f"<td class='num'>{r['match_count']}</td>"
             f"<td>{last}</td>"
-            f"<td class='num'>{sent}</td>"
-            f"<td><button class='alert-btn' disabled "
-            f"title='Send path coming in Step 2'>Alert counterparties</button></td>"
+            f"<td class='num'>{sent_cell}</td>"
+            f"<td><button class='alert-btn' "
+            f"onclick='alertCounterparties({r['id']}, {onclick_company}, {r['match_count']})'>"
+            f"Alert counterparties</button></td>"
             f"</tr>"
         )
 
     html = (
         "<!DOCTYPE html><html><head><meta charset='utf-8'>"
         "<title>Deal Notifier — Admin</title>"
-        "<style>" + ADMIN_CSS + "</style></head><body>"
+        "<style>" + ADMIN_CSS + "</style>"
+        "<script>var ADMIN_KEY_JS=" + json.dumps(ADMIN_KEY) + ";" + ADMIN_JS + "</script>"
+        "</head><body>"
         "<h1>Deal Notifier — Manual Alerts</h1>"
         f"<p class='muted'>{len(rows)} active direct deals, newest first. "
         "Match counts use the same rules as the digest "
@@ -616,7 +839,12 @@ def render_admin_table(event):
 
 def lambda_handler(event, context):
     method = ((event.get("requestContext") or {}).get("http") or {}).get("method")
+    if method == "POST":
+        return handle_alert_post(event)
     if method:
+        qs = event.get("queryStringParameters") or {}
+        if qs.get("view") == "recipients":
+            return render_recipients_view(event)
         return render_admin_table(event)
     return run_digest(event, context)
 
