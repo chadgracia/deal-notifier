@@ -101,6 +101,17 @@ NEXUS_NAMES         = {6460632: "Direct", 6460633: "RMS Broker",
                        6460634: "Foreign Finder", 6460635: "Co-Broker"}
 LAYERS_FIELD        = "custom_label_3938743"
 LAYERS_MAP          = {7000228: "1-Layer", 7000229: "2-Layer", 7000230: "3-Layer"}
+SELLER_FEE_FIELD    = "custom_label_3940560"
+MGMT_FEE_FIELD      = "custom_label_3940558"
+CARRY_FIELD         = "custom_label_3940559"
+
+
+def fmt_fee(v):
+    """10.0 -> '10', 2.5 -> '2.5', blank -> '-'."""
+    try:
+        return f"{float(v):g}"
+    except (TypeError, ValueError):
+        return "-"
 
 # Active deal stages
 FIRM_STAGE_ID       = 111800
@@ -594,7 +605,8 @@ def handle_alert_post(event):
             "New activity on a trade you are following:",
             "",
             company,
-            deal_line(deal),
+            deal_summary(deal),
+            f"{TRADES_URL}/deal/{deal_id}",
             "",
             "─" * 22,
             "",
@@ -710,13 +722,20 @@ def deal_summary(deal):
     else:
         size_str = ""
     layer = get_layer(cf)
-    structure = f"{layer} SPV" if layer else get_structure(cf)
+    structure = f"SPV {layer[0]}L" if layer else get_structure(cf)
+    sf = cf.get(SELLER_FEE_FIELD)
+    mf = cf.get(MGMT_FEE_FIELD)
+    cy = cf.get(CARRY_FIELD)
+    if any(v not in (None, "", []) for v in (sf, mf, cy)):
+        fees = f" {fmt_fee(sf)}/{fmt_fee(mf)}/{fmt_fee(cy)}"
+    else:
+        fees = ""
     gross = parse_size(cf, GROSS_FIELD)
     price = f" @ ${gross:,.2f}" if gross is not None else ""
     parts = [side]
     if size_str:
         parts.append(size_str)
-    parts.append(f"{structure}{price}")
+    parts.append(f"{structure}{fees}{price}")
     return " | ".join(parts)
 
 
