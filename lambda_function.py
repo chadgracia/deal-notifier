@@ -97,6 +97,8 @@ ACCEPTS_FIELD       = "custom_label_3998063"
 ACCEPTS_FORWARDS_ID = 7177776
 NEXUS_FIELD         = "custom_label_3751449"
 NEXUS_DIRECT_ID     = 6460632
+NEXUS_NAMES         = {6460632: "Direct", 6460633: "RMS Broker",
+                       6460634: "Foreign Finder", 6460635: "Co-Broker"}
 LAYERS_FIELD        = "custom_label_3938743"
 LAYERS_MAP          = {7000228: "1-Layer", 7000229: "2-Layer", 7000230: "3-Layer"}
 
@@ -762,8 +764,7 @@ def render_admin_table(event):
         nexus_ids = cf.get(NEXUS_FIELD) or []
         if not isinstance(nexus_ids, list):
             nexus_ids = [nexus_ids]
-        if NEXUS_DIRECT_ID not in nexus_ids:
-            continue
+        nexus_label = ", ".join(NEXUS_NAMES.get(n, "?") for n in nexus_ids) or "—"
         company = ((deal.get("company") or {}).get("name") or "").strip()
         if not company:
             continue
@@ -776,6 +777,7 @@ def render_admin_table(event):
             "company": company,
             "summary": deal_summary(deal),
             "stage": "Firm" if stage_id == FIRM_STAGE_ID else "Inquiry",
+            "nexus": nexus_label,
             "updated": updated,
             "updated_str": (deal.get("updated_at") or "")[:16],
             "match_count": len(matches),
@@ -804,6 +806,7 @@ def render_admin_table(event):
             f"<tr>"
             f"<td><a href='{TRADES_URL}/deal/{r['id']}' target='_blank'>{comp}</a></td>"
             f"<td>{r['stage']}</td>"
+            f"<td>{r['nexus']}</td>"
             f"<td>{summ}</td>"
             f"<td>{r['updated_str']}</td>"
             f"<td class='num'>{r['match_count']}</td>"
@@ -822,10 +825,10 @@ def render_admin_table(event):
         "<script>var ADMIN_KEY_JS=" + json.dumps(ADMIN_KEY) + ";" + ADMIN_JS + "</script>"
         "</head><body>"
         "<h1>Deal Notifier — Manual Alerts</h1>"
-        f"<p class='muted'>{len(rows)} active direct deals, newest first. "
+        f"<p class='muted'>{len(rows)} active deals (all nexus types), newest first. "
         "Match counts use the same rules as the digest "
         "(whitelist, broadcast, interests, ticket size, forwards).</p>"
-        "<table><tr><th>Company</th><th>Stage</th><th>Deal</th><th>Updated</th>"
+        "<table><tr><th>Company</th><th>Stage</th><th>Nexus</th><th>Deal</th><th>Updated</th>"
         "<th>Matches</th><th>Last alerted</th><th>Sent</th><th></th></tr>"
         + "".join(body_rows) +
         "</table></body></html>"
