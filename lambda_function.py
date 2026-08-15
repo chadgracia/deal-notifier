@@ -272,6 +272,8 @@ def get_structure(cf):
             return "Fund"
         if v == DIRECT_STRUCTURE_ID:
             return "Direct"
+        if v == FORWARD_STRUCTURE_ID:
+            return "Forward"
         return "Other"
     except Exception:
         return "Other"
