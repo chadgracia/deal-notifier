@@ -48,13 +48,16 @@ JWT_KEY             = "pipeline-jwt.json"
 SES_SENDER          = "agent@agent.graciagroup.com"
 CHAD_EMAIL          = "cgracia@rainmakersecurities.com"
 TRADES_URL          = "https://trades.graciagroup.com"
+# CloudFront front door for the client-facing functions; routes on path prefix,
+# so the trailing slash on each prefix is significant.
+DESK_URL            = "https://desk.graciagroup.com"
 INTEREST_FORM_URL   = "https://mrp5bv4iia7jxjfrvn67tpycsu0jqvny.lambda-url.us-east-1.on.aws/"
 
 DRY_RUN             = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_EMAILS          = int(os.environ.get("MAX_EMAILS", "10"))
 LOOKBACK_HOURS      = int(os.environ["LOOKBACK_HOURS"])
 HMAC_SECRET         = os.environ["HMAC_SECRET"]
-PORTFOLIO_URL         = "https://jtm2stbnfelfoabi3yvyvyqovu0wxahu.lambda-url.us-east-1.on.aws"
+PORTFOLIO_URL         = DESK_URL
 PORTFOLIO_HMAC_SECRET = "D8mxQTEKuLfsbRsCuTX5qMAuQtAx8EngAAlTRzmJTmM"
 
 # Person fields
