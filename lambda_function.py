@@ -321,6 +321,34 @@ def parse_pipeline_ts(s):
         return None
 
 
+def rel_time(iso_str):
+    """Human-relative time from an ISO timestamp: 'just now', '4 hrs ago', '3 days ago'."""
+    if not iso_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return iso_str[:16]
+    secs = (datetime.now(timezone.utc) - dt).total_seconds()
+    if secs < 0:
+        secs = 0
+    if secs < 60:
+        return "just now"
+    mins = int(secs // 60)
+    if mins < 60:
+        return f"{mins} min ago"
+    hrs = int(secs // 3600)
+    if hrs < 24:
+        return f"{hrs} hr{'s' if hrs != 1 else ''} ago"
+    days = int(secs // 86400)
+    if days < 31:
+        return f"{days} day{'s' if days != 1 else ''} ago"
+    months = days // 30
+    return f"{months} month{'s' if months != 1 else ''} ago"
+
+
 def parse_size(cf, field):
     """Returns deal size field as float, or None if missing/zero."""
     v = cf.get(field)
@@ -538,7 +566,7 @@ def render_recipients_view(event):
     mode = " (DRY RUN — routed to Chad)" if hist.get("dry_run") else ""
     inner = (
         f"<p><b>{h_escape(hist.get('company') or '')}</b> — deal {h_escape(deal_id)}<br>"
-        f"Alerted {h_escape((hist.get('last_alerted') or '')[:16])}{mode} — "
+        f"Alerted {h_escape(rel_time(hist.get('last_alerted') or ''))}{mode} — "
         f"{hist.get('recipients_count')} recipient(s).</p>"
         + recipients_table_html(hist.get("recipients") or [])
         + f"<p><a href='?key={ADMIN_KEY}'>&larr; Back to deals table</a></p>"
@@ -806,7 +834,7 @@ def render_admin_table(event):
             "updated": updated,
             "updated_str": (deal.get("updated_at") or "")[:16],
             "match_count": len(matches),
-            "last_alerted": (hist.get("last_alerted") or "")[:16],
+            "last_alerted": rel_time(hist.get("last_alerted") or ""),
             "sent_count": hist.get("recipients_count"),
             "was_dry": bool(hist.get("dry_run")),
         })
