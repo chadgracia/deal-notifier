@@ -96,6 +96,15 @@ STRUCTURE_FIELD     = "custom_label_3064360"
 FUND_STRUCTURE_ID   = 5077906
 DIRECT_STRUCTURE_ID = 6250090
 FORWARD_STRUCTURE_ID = 5077903
+UNKNOWN_STRUCTURE_ID = 6361933
+NONE_STRUCTURE_ID    = 5077909
+STRUCTURE_NAMES = {
+    DIRECT_STRUCTURE_ID:  "Direct",
+    FUND_STRUCTURE_ID:    "Fund",
+    FORWARD_STRUCTURE_ID: "Forward",
+    UNKNOWN_STRUCTURE_ID: "Unknown",
+    NONE_STRUCTURE_ID:    "None",
+}
 ACCEPTS_FIELD       = "custom_label_3998063"
 ACCEPTS_FORWARDS_ID = 7177776
 NEXUS_FIELD         = "custom_label_3751449"
@@ -349,22 +358,28 @@ def is_buy_deal(cf):
 
 
 def get_structure(cf):
+    """Full multi-select aware label. Meaningful structures (Direct, Fund,
+    Forward) are joined with '+' in priority order; Unknown/None only show
+    when they are all the deal has. Unmapped or empty -> 'Other'."""
     raw = cf.get(STRUCTURE_FIELD)
-    if isinstance(raw, list):
-        raw = raw[0] if raw else None
-    if raw is None:
+    ids = raw if isinstance(raw, list) else ([raw] if raw is not None else [])
+    parsed = []
+    for v in ids:
+        try:
+            parsed.append(int(float(str(v))))
+        except Exception:
+            continue
+    if not parsed:
         return "Other"
-    try:
-        v = int(float(str(raw)))
-        if v == FUND_STRUCTURE_ID:
-            return "Fund"
-        if v == DIRECT_STRUCTURE_ID:
-            return "Direct"
-        if v == FORWARD_STRUCTURE_ID:
-            return "Forward"
-        return "Other"
-    except Exception:
-        return "Other"
+    priority = [DIRECT_STRUCTURE_ID, FORWARD_STRUCTURE_ID, FUND_STRUCTURE_ID]
+    meaningful = [STRUCTURE_NAMES[i] for i in priority if i in parsed]
+    if meaningful:
+        return "+".join(meaningful)
+    fallback = [STRUCTURE_NAMES[i] for i in (UNKNOWN_STRUCTURE_ID,
+                                             NONE_STRUCTURE_ID) if i in parsed]
+    if fallback:
+        return fallback[0]
+    return "Other"
 
 
 def deal_is_forward_only(deal):
