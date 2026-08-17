@@ -139,6 +139,91 @@ RMS does not recommend the purchase or sale of Securities. Potential buyers or s
 RISK FACTORS: Investments in the Securities are speculative and involve a high degree of risk. Companies engaging in private placements may be early stage and high risk. You should be able to afford the increased risk of loss with such investments, including the potential of a total loss. An investor in the Securities should have little to no need for liquidity in the foreseeable future. Unlike an investment purchased on a stock exchange, an investment in a private placement is highly illiquid. You will most likely be investing in restricted securities, may have difficulty finding a buyer for the securities when you can resell and, as a result, may need to hold the securities indefinitely. Limited disclosure: Companies engaging in private placements are not required to provide the disclosure that would be required in a registered offering. Potential buyers or sellers of the Securities should seek professional counsel prior to entering into any transaction."""
 
 
+# ── HTML email (inline styles mirror master.css palette) ──────────────────────
+EMAIL_FONT_STACK = (
+    "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,"
+    "Helvetica,Arial,sans-serif"
+)
+EMAIL_ACCENT   = "#3d5a73"
+EMAIL_POS      = "#1f7a4d"
+EMAIL_INK      = "#1f2937"
+EMAIL_MUTED    = "#6b7280"
+EMAIL_FAINT    = "#9ca3af"
+EMAIL_BORDER   = "#cdc9c0"
+EMAIL_HAIRLINE = "#e5e2dc"
+
+
+def email_button(url, label, color=EMAIL_ACCENT):
+    return (
+        f"<a href='{url}' style='display:inline-block;background:{color};"
+        "color:#ffffff;font-size:13px;font-weight:600;padding:8px 16px;"
+        f"border-radius:5px;text-decoration:none;'>{label} &rarr;</a>"
+    )
+
+
+def email_company_heading(name):
+    return (
+        "<div style='font-size:16px;font-weight:700;color:#0f172a;"
+        f"margin:18px 0 4px 0;'>{h_escape(name)}</div>"
+    )
+
+
+def email_section_heading(text):
+    return (
+        "<div style='font-size:12px;font-weight:700;letter-spacing:0.08em;"
+        f"text-transform:uppercase;color:{EMAIL_MUTED};"
+        f"border-top:1px solid {EMAIL_HAIRLINE};padding-top:18px;"
+        f"margin:22px 0 4px 0;'>{h_escape(text)}</div>"
+    )
+
+
+def email_shell(greeting, intro, inner_html, form_url, banner=""):
+    disclosure_html = (
+        "<p style='margin:0 0 10px 0;'>"
+        + h_escape(DISCLOSURE).replace("\n\n", "</p><p style='margin:0 0 10px 0;'>")
+        + "</p>"
+    )
+    banner_html = ""
+    if banner:
+        banner_html = (
+            "<div style='background:#fdf6e3;border:1px solid #e0c869;"
+            "color:#7a5d00;font-size:12px;padding:10px 14px;border-radius:6px;"
+            "margin-bottom:18px;white-space:pre-line;'>"
+            + h_escape(banner) + "</div>"
+        )
+    return (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "</head>"
+        f"<body style=\"margin:0;padding:0;background:#f4f3f0;"
+        f"font-family:{EMAIL_FONT_STACK};\">"
+        "<div style='max-width:620px;margin:0 auto;padding:28px 16px;'>"
+        f"<div style='background:#ffffff;border:1px solid {EMAIL_BORDER};"
+        "border-radius:8px;padding:28px 32px;'>"
+        f"<div style='font-size:13px;font-weight:700;letter-spacing:0.14em;"
+        f"color:{EMAIL_ACCENT};text-transform:uppercase;"
+        f"border-bottom:2px solid {EMAIL_ACCENT};padding-bottom:10px;"
+        "margin-bottom:22px;'>Gracia Group</div>"
+        + banner_html +
+        f"<p style='font-size:14px;color:{EMAIL_INK};line-height:1.5;"
+        f"margin:0 0 12px 0;'>Hello {h_escape(greeting)},</p>"
+        f"<p style='font-size:14px;color:{EMAIL_INK};line-height:1.5;"
+        f"margin:0 0 6px 0;'>{h_escape(intro)}</p>"
+        + inner_html +
+        f"<div style='border-top:1px solid {EMAIL_HAIRLINE};"
+        "margin:26px 0 16px 0;'></div>"
+        f"<p style='font-size:12px;color:{EMAIL_MUTED};margin:0 0 10px 0;'>"
+        "Not an offer to buy or sell securities.</p>"
+        f"<p style='font-size:12px;margin:0 0 20px 0;'>"
+        f"<a href='{form_url}' style='color:{EMAIL_ACCENT};"
+        "text-decoration:underline;'>Unsubscribe or update your "
+        "buy/sell preferences</a></p>"
+        f"<div style='font-size:10px;color:{EMAIL_FAINT};line-height:1.5;'>"
+        + disclosure_html +
+        "</div></div></div></body></html>"
+    )
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def get_jwt():
@@ -168,14 +253,17 @@ def load_snapshot(key):
     return json.loads(obj['Body'].read())
 
 
-def send_email(to_address, subject, body):
+def send_email(to_address, subject, body, html=None):
     ses = boto3.client("ses", region_name="us-east-1")
+    body_part = {"Text": {"Data": body}}
+    if html:
+        body_part["Html"] = {"Data": html}
     ses.send_email(
         Source=f'"Chad Gracia / Gracia Group" <{SES_SENDER}>',
         Destination={"ToAddresses": [to_address]},
         Message={
             "Subject": {"Data": subject},
-            "Body":    {"Text": {"Data": body}}
+            "Body":    body_part
         },
         ReplyToAddresses=[CHAD_EMAIL],
     )
@@ -387,7 +475,7 @@ def get_layer(cf):
         return None
 
 
-def deal_line(deal):
+def _deal_line_bits(deal):
     cf   = deal.get("custom_fields", {})
     side = "Seller" if is_sell_deal(cf) else "Buyer"
 
@@ -417,7 +505,23 @@ def deal_line(deal):
     inner = f"{size_str} | {structure_label}" if size_str else structure_label
     if price_str:
         inner = f"{inner} {price_str}"
-    return f"  New {side} ({inner}) → {TRADES_URL}/deal/{deal['id']}"
+    return side, inner, f"{TRADES_URL}/deal/{deal['id']}"
+
+
+def deal_line(deal):
+    side, inner, url = _deal_line_bits(deal)
+    return f"  New {side} ({inner}) → {url}"
+
+
+def deal_line_html(deal):
+    side, inner, url = _deal_line_bits(deal)
+    return (
+        "<div style='margin:4px 0 14px 0;'>"
+        f"<div style='font-size:13px;color:{EMAIL_INK};margin-bottom:8px;'>"
+        f"New <strong>{h_escape(side)}</strong> ({h_escape(inner)})</div>"
+        + email_button(url, "View deal")
+        + "</div>"
+    )
 
 
 def get_person_ticket_range(cf):
@@ -652,11 +756,22 @@ def handle_alert_post(event):
             DISCLOSURE,
         ]
         body = "\n".join(lines)
+        inner_html = (
+            email_company_heading(company)
+            + f"<div style='font-size:13px;color:{EMAIL_MUTED};"
+              f"margin:0 0 10px 0;'>{h_escape(deal_summary(deal))}</div>"
+            + email_button(f"{TRADES_URL}/deal/{deal_id}", "View deal")
+        )
+        intro = "New activity on a trade you are following:"
         if DRY_RUN:
             header = f"[DRY RUN] Real recipient: {email} ({full_name})\n\n"
-            send_email(CHAD_EMAIL, f"[DRY RUN] {subject}", header + body)
+            html_body = email_shell(greeting, intro, inner_html, form_url,
+                                    banner=header.strip())
+            send_email(CHAD_EMAIL, f"[DRY RUN] {subject}", header + body,
+                       html_body)
         else:
-            send_email(email, subject, body)
+            html_body = email_shell(greeting, intro, inner_html, form_url)
+            send_email(email, subject, body, html_body)
         time.sleep(0.5)
         recipients.append({
             "name": full_name or "(no name)",
@@ -1048,17 +1163,22 @@ def run_digest(event, context):
             "New activity on trades you are following:",
         ]
 
+        html_blocks = []
         for sec_name in sorted(sell_opps):
             lines.append("")
             lines.append(sec_name)
+            html_blocks.append(email_company_heading(sec_name))
             for d in sell_opps[sec_name]:
                 lines.append(deal_line(d))
+                html_blocks.append(deal_line_html(d))
 
         for sec_name in sorted(buy_opps):
             lines.append("")
             lines.append(sec_name)
+            html_blocks.append(email_company_heading(sec_name))
             for d in buy_opps[sec_name]:
                 lines.append(deal_line(d))
+                html_blocks.append(deal_line_html(d))
 
         my_buy_names = set()
         for entry_id in (cf.get(BUYING_FIELD) or []):
@@ -1066,6 +1186,7 @@ def run_digest(event, context):
             if nm:
                 my_buy_names.add(_auction_base_name(nm))
         auction_lines = []
+        auction_html  = []
         for a in live_auctions:
             if _auction_base_name(a["company"]) not in my_buy_names:
                 continue
@@ -1081,12 +1202,24 @@ def run_digest(event, context):
             auction_lines.append("")
             auction_lines.append(f"{a['company']} — LIVE AUCTION ({detail})")
             auction_lines.append(f"  Place or raise a bid → {link}")
+            auction_html.append(email_company_heading(a["company"]))
+            auction_html.append(
+                f"<div style='font-size:13px;color:{EMAIL_MUTED};"
+                f"margin:0 0 8px 0;'>Live auction &mdash; {h_escape(detail)}"
+                "</div>"
+                + f"<div style='margin:0 0 14px 0;'>"
+                + email_button(link, "Place or raise a bid", color=EMAIL_POS)
+                + "</div>"
+            )
         if auction_lines:
             lines.append("")
             lines.append("─" * 22)
             lines.append("")
             lines.append("LIVE AUCTIONS you can bid on now:")
             lines += auction_lines
+            html_blocks.append(
+                email_section_heading("Live auctions you can bid on now"))
+            html_blocks += auction_html
 
         lines += [
             "",
@@ -1110,10 +1243,17 @@ def run_digest(event, context):
                 if person_min is not None else
                 f"[DRY RUN] Real recipient: {email} ({full_name})\nTicket range: not set\n\n"
             )
-            send_email(CHAD_EMAIL, f"[DRY RUN] {subject}", header + body)
+            html_body = email_shell(
+                greeting, "New activity on trades you are following:",
+                "".join(html_blocks), form_url, banner=header.strip())
+            send_email(CHAD_EMAIL, f"[DRY RUN] {subject}", header + body,
+                       html_body)
             time.sleep(0.5)
         else:
-            send_email(email, subject, body)
+            html_body = email_shell(
+                greeting, "New activity on trades you are following:",
+                "".join(html_blocks), form_url)
+            send_email(email, subject, body, html_body)
             time.sleep(0.5)
 
         emails_sent += 1
