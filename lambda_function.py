@@ -125,6 +125,15 @@ def fmt_fee(v):
     except (TypeError, ValueError):
         return "-"
 
+
+def fmt_fee_group(sf, mf, cy):
+    """Seller/mgmt/carry as '5/0/10'. A blank seller fee is dropped rather
+    than rendered as a dash, so SPV-only terms read '0/0'."""
+    parts = [fmt_fee(mf), fmt_fee(cy)]
+    if sf not in (None, "", []):
+        parts.insert(0, fmt_fee(sf))
+    return "/".join(parts)
+
 # Active deal stages
 FIRM_STAGE_ID       = 111800
 INQUIRY_STAGE_ID    = 2109142
@@ -889,7 +898,7 @@ def deal_summary(deal):
     mf = cf.get(MGMT_FEE_FIELD)
     cy = cf.get(CARRY_FIELD)
     if any(v not in (None, "", []) for v in (sf, mf, cy)):
-        fees = f" {fmt_fee(sf)}/{fmt_fee(mf)}/{fmt_fee(cy)}"
+        fees = f" {fmt_fee_group(sf, mf, cy)}"
     else:
         fees = ""
     gross = parse_size(cf, GROSS_FIELD)
@@ -935,7 +944,7 @@ def deal_sentences(deal, company):
     mf = cf.get(MGMT_FEE_FIELD)
     cy = cf.get(CARRY_FIELD)
     if any(v not in (None, "", []) for v in (sf, mf, cy)):
-        fee_phrase = f"Fees {fmt_fee(sf)}/{fmt_fee(mf)}/{fmt_fee(cy)}"
+        fee_phrase = f"Fees {fmt_fee_group(sf, mf, cy)}"
     else:
         fee_phrase = ""
     bits = [f"There is a new {side} of {company}"]
