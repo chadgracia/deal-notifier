@@ -752,14 +752,13 @@ def handle_alert_post(event):
         full_name  = f"{first_name} {(person.get('last_name') or '')}".strip()
         greeting   = first_name or full_name or "there"
         form_url   = f"{INTEREST_FORM_URL.rstrip('/')}/?person_id={person['id']}&token={make_token(person['id'])}"
+        sentence = deal_sentences(deal, company)
         lines = [
             f"Hello {greeting},",
             "",
-            "New activity on a trade you are following:",
+            sentence,
             "",
-            company,
-            deal_summary(deal),
-            f"{TRADES_URL}/deal/{deal_id}",
+            f"View details: {TRADES_URL}/deal/{deal_id}",
             "",
             "─" * 22,
             "",
@@ -772,12 +771,11 @@ def handle_alert_post(event):
         ]
         body = "\n".join(lines)
         inner_html = (
-            email_company_heading(company)
-            + f"<div style='font-size:13px;color:{EMAIL_MUTED};"
-              f"margin:0 0 10px 0;'>{h_escape(deal_summary(deal))}</div>"
-            + email_button(f"{TRADES_URL}/deal/{deal_id}", "View deal")
+            "<div style='margin:14px 0 0 0;'>"
+            + email_button(f"{TRADES_URL}/deal/{deal_id}", "View details")
+            + "</div>"
         )
-        intro = "New activity on a trade you are following:"
+        intro = sentence
         if DRY_RUN:
             header = f"[DRY RUN] Real recipient: {email} ({full_name})\n\n"
             html_body = email_shell(greeting, intro, inner_html, form_url,
@@ -901,6 +899,50 @@ def deal_summary(deal):
         parts.append(size_str)
     parts.append(f"{structure}{fees}{price}")
     return " | ".join(parts)
+
+
+def deal_sentences(deal, company):
+    """Plain-English one-liner: 'There is a new buyer of Fireworks AI.
+    $4M – $8M. Investment via Fund.'"""
+    cf   = deal.get("custom_fields", {})
+    side = ("seller" if is_sell_deal(cf)
+            else ("buyer" if is_buy_deal(cf) else "counterparty"))
+    dmin = parse_size(cf, MIN_SIZE_FIELD)
+    dmax = parse_size(cf, MAX_SIZE_FIELD)
+    if dmin is not None and dmax is not None:
+        size_str = (fmt_size(dmin) if dmin == dmax
+                    else f"{fmt_size(dmin)} – {fmt_size(dmax)}")
+    elif dmin is not None:
+        size_str = f"Minimum {fmt_size(dmin)}"
+    elif dmax is not None:
+        size_str = f"Maximum {fmt_size(dmax)}"
+    else:
+        size_str = ""
+    layer = get_layer(cf)
+    if layer:
+        structure_phrase = f"Investment via {layer} SPV"
+    else:
+        structure = get_structure(cf)
+        if structure == "Direct":
+            structure_phrase = "Direct investment"
+        elif structure in ("Unknown", "None", "Other"):
+            structure_phrase = ""
+        else:
+            structure_phrase = f"Investment via {structure.replace('+', ' or ')}"
+    gross = parse_size(cf, GROSS_FIELD)
+    price_phrase = f"Price ${gross:,.2f}/share" if gross is not None else ""
+    sf = cf.get(SELLER_FEE_FIELD)
+    mf = cf.get(MGMT_FEE_FIELD)
+    cy = cf.get(CARRY_FIELD)
+    if any(v not in (None, "", []) for v in (sf, mf, cy)):
+        fee_phrase = f"Fees {fmt_fee(sf)}/{fmt_fee(mf)}/{fmt_fee(cy)}"
+    else:
+        fee_phrase = ""
+    bits = [f"There is a new {side} of {company}"]
+    for b in (size_str, structure_phrase, price_phrase, fee_phrase):
+        if b:
+            bits.append(b)
+    return ". ".join(bits) + "."
 
 
 ADMIN_CSS = """
