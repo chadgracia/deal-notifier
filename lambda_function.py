@@ -26,6 +26,7 @@ Environment variables:
 
 import json
 import logging
+import re
 import time
 import urllib.request
 import urllib.error
@@ -762,9 +763,12 @@ def handle_alert_post(event):
         greeting   = first_name or full_name or "there"
         form_url   = f"{INTEREST_FORM_URL.rstrip('/')}/?person_id={person['id']}&token={make_token(person['id'])}"
         sentence = deal_sentences(deal, company)
+        note = (form.get("note") or "").strip()[:500]
+        note_lines = [note, ""] if note else []
         lines = [
             f"Hello {greeting},",
             "",
+        ] + note_lines + [
             sentence,
             "",
             f"View details: {TRADES_URL}/deal/{deal_id}",
@@ -779,12 +783,31 @@ def handle_alert_post(event):
             DISCLOSURE,
         ]
         body = "\n".join(lines)
-        inner_html = (
+        button_html = (
             "<div style='margin:14px 0 0 0;'>"
             + email_button(f"{TRADES_URL}/deal/{deal_id}", "View details")
             + "</div>"
         )
-        intro = sentence
+        if note:
+            note_html = h_escape(note)
+            note_html = re.sub(
+                r"(https?://[^\s<]+|(?:www\.|[\w.-]+\.(?:com|org|net|io|ai|co|gov))[^\s<]*)",
+                lambda m: "<a href='"
+                + (m.group(0) if m.group(0).startswith("http")
+                   else "https://" + m.group(0)).rstrip(".,;:!?)")
+                + f"' style='color:{EMAIL_ACCENT};'>" + m.group(0) + "</a>",
+                note_html)
+            intro = ""
+            inner_html = (
+                f"<p style='font-size:14px;color:{EMAIL_INK};line-height:1.5;"
+                f"margin:0 0 14px 0;'>{note_html}</p>"
+                f"<p style='font-size:14px;color:{EMAIL_INK};line-height:1.5;"
+                f"margin:0 0 6px 0;'>{h_escape(sentence)}</p>"
+                + button_html
+            )
+        else:
+            intro = sentence
+            inner_html = button_html
         if DRY_RUN:
             header = f"[DRY RUN] Real recipient: {email} ({full_name})\n\n"
             html_body = email_shell(greeting, intro, inner_html, form_url,
@@ -818,8 +841,11 @@ def handle_alert_post(event):
 ADMIN_JS = """
 function alertCounterparties(dealId, company, matches) {
   var msg = "Send alert for " + company + " to " + matches + " counterpart" +
-            (matches === 1 ? "y" : "ies") + "?";
-  if (!confirm(msg)) { return; }
+            (matches === 1 ? "y" : "ies") + "?\\n\\n" +
+            "Optional note to include at the top of the email " +
+            "(leave blank for none):";
+  var note = prompt(msg, "");
+  if (note === null) { return; }
   var f = document.createElement("form");
   f.method = "POST";
   f.action = window.location.pathname;
@@ -829,8 +855,21 @@ function alertCounterparties(dealId, company, matches) {
   var d = document.createElement("input");
   d.type = "hidden"; d.name = "deal_id"; d.value = dealId;
   f.appendChild(d);
+  var n = document.createElement("input");
+  n.type = "hidden"; n.name = "note"; n.value = note;
+  f.appendChild(n);
   document.body.appendChild(f);
   f.submit();
+}
+function filterSide(side, btn) {
+  document.querySelectorAll(".side-btn").forEach(function (b) {
+    b.classList.remove("active");
+  });
+  btn.classList.add("active");
+  document.querySelectorAll("tr[data-side]").forEach(function (tr) {
+    tr.style.display =
+      (side === "all" || tr.dataset.side === side) ? "" : "none";
+  });
 }
 """
 
@@ -970,6 +1009,9 @@ button.alert-btn { background: #2563eb; color: #fff; border: none;
                    padding: 5px 10px; border-radius: 5px; cursor: pointer; }
 button.alert-btn:hover { background: #1d4ed8; }
 a { color: #2563eb; text-decoration: none; }
+.side-filters { margin-left: 10px; font-weight: normal; }
+.side-btn { font-size: 11px; padding: 2px 8px; margin-left: 4px; border: 1px solid #cdc9c0; background: #fff; border-radius: 4px; cursor: pointer; }
+.side-btn.active { background: #3d5a73; color: #fff; border-color: #3d5a73; }
 """
 
 
@@ -1036,8 +1078,11 @@ def render_admin_table(event):
                          f"{r['sent_count']}{dry_tag}</a>")
         last = r["last_alerted"] or '<span class="muted">never</span>'
         onclick_company = h_escape(json.dumps(r["company"]), quote=True)
+        side_attr = ("seller" if r["summary"].startswith("Seller")
+                     else ("buyer" if r["summary"].startswith("Buyer")
+                           else "other"))
         body_rows.append(
-            f"<tr>"
+            f"<tr data-side='{side_attr}'>"
             f"<td><a href='{TRADES_URL}/deal/{r['id']}' target='_blank'>{comp}</a></td>"
             f"<td>{r['stage']}</td>"
             f"<td>{r['nexus']}</td>"
@@ -1062,7 +1107,12 @@ def render_admin_table(event):
         f"<p class='muted'>{len(rows)} active deals (all nexus types), newest first. "
         "Match counts use the same rules as the digest "
         "(whitelist, broadcast, interests, ticket size, forwards).</p>"
-        "<table><tr><th>Company</th><th>Stage</th><th>Nexus</th><th>Deal</th><th>Updated</th>"
+        "<table><tr><th>Company</th><th>Stage</th><th>Nexus</th>"
+        "<th>Deal <span class='side-filters'>"
+        "<button class='side-btn active' onclick='filterSide(\"all\", this)'>All</button>"
+        "<button class='side-btn' onclick='filterSide(\"buyer\", this)'>Buyers</button>"
+        "<button class='side-btn' onclick='filterSide(\"seller\", this)'>Sellers</button>"
+        "</span></th><th>Updated</th>"
         "<th>Matches</th><th>Last alerted</th><th>Sent</th><th></th></tr>"
         + "".join(body_rows) +
         "</table></body></html>"
