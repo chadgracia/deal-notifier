@@ -763,7 +763,7 @@ def handle_alert_post(event):
         greeting   = first_name or full_name or "there"
         form_url   = f"{INTEREST_FORM_URL.rstrip('/')}/?person_id={person['id']}&token={make_token(person['id'])}"
         sentence = deal_sentences(deal, company)
-        note = (form.get("note") or "").strip()[:500]
+        note = (form.get("note") or "").strip()[:1000]
         note_lines = [note, ""] if note else []
         lines = [
             f"Hello {greeting},",
@@ -797,6 +797,7 @@ def handle_alert_post(event):
                    else "https://" + m.group(0)).rstrip(".,;:!?)")
                 + f"' style='color:{EMAIL_ACCENT};'>" + m.group(0) + "</a>",
                 note_html)
+            note_html = note_html.replace("\n", "<br>")
             intro = ""
             inner_html = (
                 f"<p style='font-size:14px;color:{EMAIL_INK};line-height:1.5;"
@@ -839,13 +840,22 @@ def handle_alert_post(event):
 
 
 ADMIN_JS = """
+var PENDING_DEAL_ID = null;
 function alertCounterparties(dealId, company, matches) {
-  var msg = "Send alert for " + company + " to " + matches + " counterpart" +
-            (matches === 1 ? "y" : "ies") + "?\\n\\n" +
-            "Optional note to include at the top of the email " +
-            "(leave blank for none):";
-  var note = prompt(msg, "");
-  if (note === null) { return; }
+  PENDING_DEAL_ID = dealId;
+  document.getElementById("modal-title").textContent =
+    "Alert " + matches + " counterpart" + (matches === 1 ? "y" : "ies") +
+    " about " + company;
+  document.getElementById("modal-note").value = "";
+  document.getElementById("alert-modal").style.display = "flex";
+  document.getElementById("modal-note").focus();
+}
+function closeAlertModal() {
+  PENDING_DEAL_ID = null;
+  document.getElementById("alert-modal").style.display = "none";
+}
+function sendAlert() {
+  if (PENDING_DEAL_ID === null) { return; }
   var f = document.createElement("form");
   f.method = "POST";
   f.action = window.location.pathname;
@@ -853,10 +863,11 @@ function alertCounterparties(dealId, company, matches) {
   k.type = "hidden"; k.name = "key"; k.value = ADMIN_KEY_JS;
   f.appendChild(k);
   var d = document.createElement("input");
-  d.type = "hidden"; d.name = "deal_id"; d.value = dealId;
+  d.type = "hidden"; d.name = "deal_id"; d.value = PENDING_DEAL_ID;
   f.appendChild(d);
   var n = document.createElement("input");
-  n.type = "hidden"; n.name = "note"; n.value = note;
+  n.type = "hidden"; n.name = "note";
+  n.value = document.getElementById("modal-note").value;
   f.appendChild(n);
   document.body.appendChild(f);
   f.submit();
@@ -1012,6 +1023,12 @@ a { color: #2563eb; text-decoration: none; }
 .side-filters { margin-left: 10px; font-weight: normal; }
 .side-btn { font-size: 11px; padding: 2px 8px; margin-left: 4px; border: 1px solid #cdc9c0; background: #fff; border-radius: 4px; cursor: pointer; }
 .side-btn.active { background: #3d5a73; color: #fff; border-color: #3d5a73; }
+#alert-modal { display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.45); align-items: center; justify-content: center; z-index: 50; }
+.modal-box { background: #fff; border-radius: 10px; padding: 22px 24px; width: min(520px, 92vw); box-shadow: 0 10px 40px rgba(0,0,0,0.25); }
+.modal-box h3 { margin: 0 0 4px; font-size: 16px; }
+#modal-note { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; padding: 10px; border: 1px solid #cdc9c0; border-radius: 6px; resize: vertical; }
+.modal-actions { margin-top: 12px; display: flex; justify-content: flex-end; gap: 8px; }
+.modal-cancel { font-size: 13px; padding: 6px 14px; border: 1px solid #cdc9c0; background: #fff; border-radius: 6px; cursor: pointer; }
 """
 
 
@@ -1115,7 +1132,21 @@ def render_admin_table(event):
         "</span></th><th>Updated</th>"
         "<th>Matches</th><th>Last alerted</th><th>Sent</th><th></th></tr>"
         + "".join(body_rows) +
-        "</table></body></html>"
+        "</table>"
+        "<div id='alert-modal'>"
+        "<div class='modal-box'>"
+        "<h3 id='modal-title'></h3>"
+        "<p class='muted' style='margin:4px 0 10px;'>Optional note — appears "
+        "at the top of the email, above the deal details. Line breaks are "
+        "kept; URLs become links.</p>"
+        "<textarea id='modal-note' rows='5' "
+        "placeholder='e.g. Thought you&#39;d find today&#39;s news of "
+        "interest as you explore this deal:&#10;https://...'></textarea>"
+        "<div class='modal-actions'>"
+        "<button class='modal-cancel' onclick='closeAlertModal()'>Cancel</button>"
+        "<button class='alert-btn' onclick='sendAlert()'>Send alert</button>"
+        "</div></div></div>"
+        "</body></html>"
     )
     return {"statusCode": 200,
             "headers": {"Content-Type": "text/html; charset=utf-8"},
