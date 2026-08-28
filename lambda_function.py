@@ -918,7 +918,11 @@ def find_matches_for_deal(deal, all_people, buying_name_by_entry, selling_name_b
             if nm:
                 names.add(nm.strip().lower())
         if company not in names:
-            continue
+            # Base-name fallback: a bare interest label like "1X" matches any
+            # holdco variant ("1X (US HoldCo)", "1X (Norwegian HoldCo)") —
+            # same rule as holder-counts and portfolio-deploy.
+            if _auction_base_name(company) not in {_auction_base_name(n) for n in names}:
+                continue
         pmin, pmax = get_person_ticket_range(cf)
         if not deal_in_range(deal, pmin, pmax):
             continue
