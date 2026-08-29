@@ -818,7 +818,6 @@ def handle_alert_post(event):
         else:
             html_body = email_shell(greeting, intro, inner_html, form_url)
             send_email(email, subject, body, html_body)
-        time.sleep(0.5)
         recipients.append({
             "name": full_name or "(no name)",
             "company": (person.get("company_name") or "").strip(),
