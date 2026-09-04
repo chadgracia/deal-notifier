@@ -1123,7 +1123,7 @@ def render_admin_table(event):
         pipe_link = (f" <a href='https://app.pipelinecrm.com/deals/{r['id']}'"
                      f" target='_blank' title='Open in Pipeline'"
                      f" style='font-size:11px;color:#9ca3af;text-decoration:none;'>P&#8599;</a>")
-        nudge_bell = (f" <a href='{NUDGE_URL}?deal_id={r['id']}&key={NUDGE_KEY}'"
+        nudge_bell = (f" <a href='{NUDGE_URL}?deal_id={r['id']}&key={NUDGE_KEY}&msg=info'"
                       " target='_blank' rel='noopener'"
                       " title='Nudge client to update this order'"
                       " style='font-size:12px;text-decoration:none;'>&#128276;</a>")
