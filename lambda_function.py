@@ -1068,6 +1068,21 @@ def render_admin_table(event):
         matches = find_matches_for_deal(deal, all_people,
                                         buying_name_by_entry, selling_name_by_entry)
         hist = history.get(str(deal["id"])) or {}
+        ssa_raw = cf.get("custom_label_3714334")
+        if isinstance(ssa_raw, list):
+            ssa = 6354277 in ssa_raw
+        else:
+            ssa = ssa_raw == 6354277
+        last_iso = hist.get("last_alerted") or ""
+        alerted_dt = None
+        if last_iso:
+            try:
+                alerted_dt = datetime.fromisoformat(last_iso.replace("Z", "+00:00"))
+                if alerted_dt.tzinfo is None:
+                    alerted_dt = alerted_dt.replace(tzinfo=timezone.utc)
+            except Exception:
+                alerted_dt = None
+        fresh = bool(updated and alerted_dt and updated > alerted_dt)
         rows.append({
             "id": deal["id"],
             "company": company,
@@ -1075,9 +1090,11 @@ def render_admin_table(event):
             "stage": "Firm" if stage_id == FIRM_STAGE_ID else "Inquiry",
             "nexus": nexus_label,
             "updated": updated,
-            "updated_str": (deal.get("updated_at") or "")[:16],
+            "updated_str": rel_time(updated.isoformat()) if updated else "",
+            "fresh": fresh,
+            "ssa": ssa,
             "match_count": len(matches),
-            "last_alerted": rel_time(hist.get("last_alerted") or ""),
+            "last_alerted": rel_time(last_iso),
             "sent_count": hist.get("recipients_count"),
             "was_dry": bool(hist.get("dry_run")),
         })
@@ -1101,13 +1118,20 @@ def render_admin_table(event):
         side_attr = ("seller" if r["summary"].startswith("Seller")
                      else ("buyer" if r["summary"].startswith("Buyer")
                            else "other"))
+        pipe_link = (f" <a href='https://app.pipelinecrm.com/deals/{r['id']}'"
+                     f" target='_blank' title='Open in Pipeline'"
+                     f" style='font-size:11px;color:#9ca3af;text-decoration:none;'>P&#8599;</a>")
+        ssa_dot = ("<span title='Sell-side agreement in place'"
+                   " style='color:#1f7a4d;font-weight:700;'> &#9679;</span>"
+                   if r["ssa"] and side_attr == "seller" else "")
+        upd_style = " style='color:#1f7a4d;font-weight:600;'" if r["fresh"] else ""
         body_rows.append(
             f"<tr data-side='{side_attr}'>"
-            f"<td><a href='{TRADES_URL}/deal/{r['id']}' target='_blank'>{comp}</a></td>"
+            f"<td><a href='{TRADES_URL}/deal/{r['id']}' target='_blank'>{comp}</a>{pipe_link}{ssa_dot}</td>"
             f"<td>{r['stage']}</td>"
             f"<td>{r['nexus']}</td>"
             f"<td>{summ}</td>"
-            f"<td>{r['updated_str']}</td>"
+            f"<td{upd_style}>{r['updated_str']}</td>"
             f"<td class='num'>{r['match_count']}</td>"
             f"<td>{last}</td>"
             f"<td class='num'>{sent_cell}</td>"
