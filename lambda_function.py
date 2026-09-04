@@ -53,6 +53,8 @@ TRADES_URL          = "https://trades.graciagroup.com"
 # so the trailing slash on each prefix is significant.
 DESK_URL            = "https://desk.graciagroup.com"
 INTEREST_FORM_URL   = "https://mrp5bv4iia7jxjfrvn67tpycsu0jqvny.lambda-url.us-east-1.on.aws/"
+NUDGE_URL           = "https://ak5zolfpynhrimrsuw5rbjchwu0ktexz.lambda-url.us-east-1.on.aws/"
+NUDGE_KEY           = "YUARqVzldaiY4P8EZA855faT"
 
 DRY_RUN             = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_EMAILS          = int(os.environ.get("MAX_EMAILS", "10"))
@@ -1121,13 +1123,17 @@ def render_admin_table(event):
         pipe_link = (f" <a href='https://app.pipelinecrm.com/deals/{r['id']}'"
                      f" target='_blank' title='Open in Pipeline'"
                      f" style='font-size:11px;color:#9ca3af;text-decoration:none;'>P&#8599;</a>")
+        nudge_bell = (f" <a href='{NUDGE_URL}?deal_id={r['id']}&key={NUDGE_KEY}'"
+                      " target='_blank' rel='noopener'"
+                      " title='Nudge client to update this order'"
+                      " style='font-size:12px;text-decoration:none;'>&#128276;</a>")
         ssa_dot = ("<span title='Sell-side agreement in place'"
                    " style='color:#1f7a4d;font-weight:700;'> &#9679;</span>"
                    if r["ssa"] and side_attr == "seller" else "")
         upd_style = " style='color:#1f7a4d;font-weight:600;'" if r["fresh"] else ""
         body_rows.append(
             f"<tr data-side='{side_attr}'>"
-            f"<td><a href='{TRADES_URL}/deal/{r['id']}' target='_blank'>{comp}</a>{pipe_link}{ssa_dot}</td>"
+            f"<td><a href='{TRADES_URL}/deal/{r['id']}' target='_blank'>{comp}</a>{pipe_link}{nudge_bell}{ssa_dot}</td>"
             f"<td>{r['stage']}</td>"
             f"<td>{r['nexus']}</td>"
             f"<td>{summ}</td>"
