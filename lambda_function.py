@@ -110,6 +110,8 @@ STRUCTURE_NAMES = {
 }
 ACCEPTS_FIELD       = "custom_label_3998063"
 ACCEPTS_FORWARDS_ID = 7177776
+ACCEPTS_2LAYER_ID   = 7177774
+TWO_LAYER_ID        = 7000229
 NEXUS_FIELD         = "custom_label_3751449"
 NEXUS_DIRECT_ID     = 6460632
 NEXUS_NAMES         = {6460632: "Direct", 6460633: "RMS Broker",
@@ -418,6 +420,32 @@ def person_accepts_forwards(cf):
         except Exception:
             continue
     return False
+
+
+def person_accepts_two_layer(cf):
+    """True if the person's Accepts field includes 2-Layer."""
+    raw = cf.get(ACCEPTS_FIELD)
+    ids = raw if isinstance(raw, list) else ([raw] if raw else [])
+    for v in ids:
+        try:
+            if int(float(str(v))) == ACCEPTS_2LAYER_ID:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def deal_is_two_layer(deal):
+    """True if the deal's Layers field is 2-Layer."""
+    raw = (deal.get("custom_fields", {}) or {}).get(LAYERS_FIELD)
+    if isinstance(raw, list):
+        raw = raw[0] if raw else None
+    if raw is None:
+        return False
+    try:
+        return int(float(str(raw))) == TWO_LAYER_ID
+    except Exception:
+        return False
 
 
 def parse_pipeline_ts(s):
@@ -901,6 +929,7 @@ def find_matches_for_deal(deal, all_people, buying_name_by_entry, selling_name_b
     else:
         return []
     fwd_only = deal_is_forward_only(deal)
+    two_layer_sell = is_sell_deal(cf_deal) and deal_is_two_layer(deal)
     matches = []
     for person in all_people:
         email = (person.get("email") or "").strip()
@@ -928,6 +957,8 @@ def find_matches_for_deal(deal, all_people, buying_name_by_entry, selling_name_b
         if not deal_in_range(deal, pmin, pmax):
             continue
         if fwd_only and not person_accepts_forwards(cf):
+            continue
+        if two_layer_sell and not person_accepts_two_layer(cf):
             continue
         matches.append(person)
     return matches
@@ -1312,6 +1343,7 @@ def run_digest(event, context):
                 d for d in sell_deals_by_name.get(sec_name.lower(), [])
                 if deal_in_range(d, person_min, person_max)
                 and not (deal_is_forward_only(d) and not person_accepts_forwards(cf))
+                and not (deal_is_two_layer(d) and not person_accepts_two_layer(cf))
             ]
             if matches:
                 sell_opps[sec_name] = matches
