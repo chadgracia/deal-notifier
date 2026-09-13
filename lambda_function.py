@@ -282,7 +282,7 @@ def send_email(to_address, subject, body, html=None):
     if html:
         body_part["Html"] = {"Data": html}
     ses.send_email(
-        Source=f'"Chad Gracia / Gracia Group" <{SES_SENDER}>',
+        Source=f'"Chad Gracia" <cgracia@graciagroup.com>',
         Destination={"ToAddresses": [to_address]},
         Message={
             "Subject": {"Data": subject},
