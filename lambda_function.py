@@ -676,8 +676,9 @@ def fetch_live_deal(deal_id, jwt):
 
 
 def simple_page(title, inner):
-    page = ("<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + title +
-            "</title><style>" + ADMIN_CSS + "</style></head><body><h1>" + title +
+    page = ("<!DOCTYPE html><html><head><meta charset='utf-8'>"
+            "<link rel='icon' href=\"data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔔</text></svg>\">"
+            "<title>Deal Alerts · GG Admin</title><style>" + ADMIN_CSS + "</style></head><body><h1>" + title +
             "</h1>" + inner + "</body></html>")
     return {"statusCode": 200,
             "headers": {"Content-Type": "text/html; charset=utf-8"},
@@ -1180,7 +1181,8 @@ def render_admin_table(event):
 
     html = (
         "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-        "<title>Deal Notifier — Admin</title>"
+        "<link rel='icon' href=\"data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔔</text></svg>\">"
+        "<title>Deal Alerts · GG Admin</title>"
         "<style>" + ADMIN_CSS + "</style>"
         "<script>var ADMIN_KEY_JS=" + json.dumps(ADMIN_KEY) + ";" + ADMIN_JS + "</script>"
         "</head><body>"
