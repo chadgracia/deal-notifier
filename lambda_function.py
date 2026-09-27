@@ -54,7 +54,7 @@ TRADES_URL          = "https://trades.graciagroup.com"
 DESK_URL            = "https://desk.graciagroup.com"
 INTEREST_FORM_URL   = "https://mrp5bv4iia7jxjfrvn67tpycsu0jqvny.lambda-url.us-east-1.on.aws/"
 NUDGE_URL           = "https://ak5zolfpynhrimrsuw5rbjchwu0ktexz.lambda-url.us-east-1.on.aws/"
-NUDGE_KEY           = "YUARqVzldaiY4P8EZA855faT"
+NUDGE_KEY           = os.environ.get("NUDGE_KEY", "")
 
 DRY_RUN             = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_EMAILS          = int(os.environ.get("MAX_EMAILS", "10"))
@@ -633,8 +633,15 @@ def load_field_entries(field_id, jwt):
 
 # ── Admin table (manual alerts) ───────────────────────────────────────────────
 
-ADMIN_KEY      = "JK8h5Pq2L9aZ7rT3mN6bX"
+ADMIN_KEY      = os.environ.get("ADMIN_KEY", "")
 ALERTS_LOG_KEY = "notifier-alerts.json"
+
+
+def admin_key_ok(supplied):
+    # Fail closed: an unset ADMIN_KEY must never match (not even an empty key).
+    if not ADMIN_KEY or not supplied:
+        return False
+    return hmac.compare_digest(str(supplied), ADMIN_KEY)
 
 
 def load_alert_history():
@@ -713,7 +720,7 @@ def render_recipient_report(company, deal_id, recipients, was_dry):
 
 def render_recipients_view(event):
     qs = event.get("queryStringParameters") or {}
-    if qs.get("key") != ADMIN_KEY:
+    if not admin_key_ok(qs.get("key")):
         return {"statusCode": 403,
                 "headers": {"Content-Type": "text/plain"},
                 "body": "Forbidden"}
@@ -736,7 +743,7 @@ def render_recipients_view(event):
 
 def handle_alert_post(event):
     form = parse_post_body(event)
-    if form.get("key") != ADMIN_KEY:
+    if not admin_key_ok(form.get("key")):
         return {"statusCode": 403,
                 "headers": {"Content-Type": "text/plain"},
                 "body": "Forbidden"}
@@ -1071,7 +1078,7 @@ a { color: #2563eb; text-decoration: none; }
 
 def render_admin_table(event):
     qs  = event.get("queryStringParameters") or {}
-    if qs.get("key") != ADMIN_KEY:
+    if not admin_key_ok(qs.get("key")):
         return {"statusCode": 403,
                 "headers": {"Content-Type": "text/plain"},
                 "body": "Forbidden"}
@@ -1158,7 +1165,8 @@ def render_admin_table(event):
         nudge_bell = (f" <a href='{NUDGE_URL}?deal_id={r['id']}&key={NUDGE_KEY}&msg=info'"
                       " target='_blank' rel='noopener'"
                       " title='Nudge client to update this order'"
-                      " style='font-size:12px;text-decoration:none;'>&#128276;</a>")
+                      " style='font-size:12px;text-decoration:none;'>&#128276;</a>"
+                      if NUDGE_KEY else "")
         ssa_dot = ("<span title='Sell-side agreement in place'"
                    " style='color:#1f7a4d;font-weight:700;'> &#9679;</span>"
                    if r["ssa"] and side_attr == "seller" else "")
