@@ -72,11 +72,22 @@ BROADCAST_YES_ID    = 6535328
 BROADCAST_NO_ID     = 6535329
 BROADCAST_HOLD_ID   = 6535330
 WHITELIST_TAG_ID    = 3280123
-TOTAL_ASSETS_FIELD  = "custom_label_3940251"
-TOTAL_ASSETS_INSTITUTIONAL = {7005670, 7005671, 7005672, 7005673}   # > $50M, > $100M, > $500M, > $1B
-TOTAL_ASSETS_RETAIL = {7005665, 7005666, 7005667, 7005668, 7005669}  # < $1M, > $1M, > $5M, > $10M, > $25M
-TRANSACTOR_TYPE_FIELD = "custom_label_3759163"
-SYNDICATOR_ID       = 6859893
+
+# Personal-note filter (FINRA 2210: a personal note may reach <= 25 recipients)
+NOTE_LIMIT          = 25
+INVESTOR_LEVEL_FIELD = "custom_label_3923758"
+NON_ACCREDITED_ID   = 6950562
+ACCREDITED_ID       = 6950563
+QP_ID               = 6950564
+QC_ID               = 7209227
+EMAIL_STATUS_FIELD  = "custom_label_2447206"
+BAD_EMAIL_STATUS_IDS = {3940558, 4943722, 3940678, 7214691, 4781320}
+SEC_PRIORITY_FIELD  = "custom_label_3912746"
+SEC_PRIORITY_HIGH   = 6919452
+SEC_PRIORITY_MEDIUM = 6919453
+SEC_PRIORITY_LOW    = 6919454
+SEC_PRIORITY_NONE   = 6926715
+STANDING_KEY        = "syndicate-dash/client-standing.json"
 
 # Ticket size entry ID → (min, max) in dollars
 # min = lower bound of range, max = upper bound (None = no upper limit)
@@ -703,9 +714,10 @@ def recipients_table_html(recipients):
         rows.append(
             "<tr><td>" + h_escape(r.get("name") or "") + "</td>"
             "<td>" + h_escape(r.get("company") or "") + "</td>"
-            "<td>" + h_escape(r.get("email") or "") + "</td></tr>"
+            "<td>" + h_escape(r.get("email") or "") + "</td>"
+            "<td>" + ("&#10003;" if r.get("with_note") else "") + "</td></tr>"
         )
-    return ("<table><tr><th>Name</th><th>Company</th><th>Email</th></tr>"
+    return ("<table><tr><th>Name</th><th>Company</th><th>Email</th><th>Note</th></tr>"
             + "".join(rows) + "</table>")
 
 
@@ -746,6 +758,138 @@ def render_recipients_view(event):
     return simple_page("Alert recipients", inner)
 
 
+def build_alert_email(deal, deal_id, company, greeting, form_url, note):
+    """(text_body, intro, inner_html) for one manual alert; note may be ''."""
+    sentence = deal_sentences(deal, company)
+    note_lines = [note, ""] if note else []
+    lines = [
+        f"Hello {greeting},",
+        "",
+    ] + note_lines + [
+        sentence,
+        "",
+        f"View details: {TRADES_URL}/deal/{deal_id}",
+        "",
+        "─" * 22,
+        "",
+        "Not an offer to buy or sell securities.",
+        "",
+        "UNSUBSCRIBE OR UPDATE YOUR BUY/SELL PREFERENCES:",
+        form_url,
+        "",
+        DISCLOSURE,
+    ]
+    body = "\n".join(lines)
+    button_html = (
+        "<div style='margin:14px 0 0 0;'>"
+        + email_button(f"{TRADES_URL}/deal/{deal_id}", "View details")
+        + "</div>"
+    )
+    if note:
+        note_html = h_escape(note)
+        note_html = re.sub(
+            r"(https?://[^\s<]+|(?:www\.|[\w.-]+\.(?:com|org|net|io|ai|co|gov))[^\s<]*)",
+            lambda m: "<a href='"
+            + (m.group(0) if m.group(0).startswith("http")
+               else "https://" + m.group(0)).rstrip(".,;:!?)")
+            + f"' style='color:{EMAIL_ACCENT};'>" + m.group(0) + "</a>",
+            note_html)
+        note_html = note_html.replace("\n", "<br>")
+        intro = ""
+        inner_html = (
+            f"<p style='font-size:14px;color:{EMAIL_INK};line-height:1.5;"
+            f"margin:0 0 14px 0;'>{note_html}</p>"
+            f"<p style='font-size:14px;color:{EMAIL_INK};line-height:1.5;"
+            f"margin:0 0 6px 0;'>{h_escape(sentence)}</p>"
+            + button_html
+        )
+    else:
+        intro = sentence
+        inner_html = button_html
+    return body, intro, inner_html
+
+
+def _email_body_inner(html):
+    m = re.search(r"<body[^>]*>(.*)</body>", html, re.S)
+    return m.group(1) if m else html
+
+
+def send_alert_archive(deal, deal_id, company, note, recipients):
+    """One archive copy of a manual alert to Chad. Never raises."""
+    try:
+        with_note = [r for r in recipients if r.get("with_note")]
+        without_note = [r for r in recipients if not r.get("with_note")]
+        sentence = deal_sentences(deal, company)
+        sent_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        generic_form_url = INTEREST_FORM_URL.rstrip('/') + "/"
+        versions = [("Email as sent (without note):", "")]
+        if note:
+            versions.append(("Email as sent (with note):", note))
+        rendered = []
+        for label, vnote in versions:
+            body, intro, inner_html = build_alert_email(
+                deal, deal_id, company, "there", generic_form_url, vnote)
+            rendered.append((label, body,
+                             email_shell("there", intro, inner_html, generic_form_url)))
+
+        def _line(r):
+            return f"{r.get('name') or ''}, {r.get('company') or ''}, {r.get('email') or ''}"
+
+        text = [
+            f"Date/time: {sent_at}",
+            f"Deal: {deal_id} — {company}",
+            f"Deal sentence: {sentence}",
+            "",
+            "Personal note: " + (note or "None"),
+            "",
+            f"Recipients with note ({len(with_note)}):",
+        ] + [_line(r) for r in with_note] + [
+            "",
+            f"Recipients without note ({len(without_note)}):",
+        ] + [_line(r) for r in without_note]
+        for label, body, _ in rendered:
+            text += ["", "─" * 22, label, "", body]
+
+        def _list_html(rs):
+            if not rs:
+                return "<p style='margin:0 0 12px 0;color:#6b7280;'>(none)</p>"
+            return ("<ul style='margin:0 0 12px 0;padding-left:18px;'>"
+                    + "".join("<li>" + h_escape(_line(r)) + "</li>" for r in rs)
+                    + "</ul>")
+
+        note_html = h_escape(note).replace("\n", "<br>") if note else "None"
+        html = (
+            "<!DOCTYPE html><html><head><meta charset='utf-8'></head>"
+            f"<body style='font-family:{EMAIL_FONT_STACK};font-size:14px;color:{EMAIL_INK};'>"
+            f"<p style='margin:0 0 4px 0;'><b>Date/time:</b> {h_escape(sent_at)}</p>"
+            f"<p style='margin:0 0 4px 0;'><b>Deal:</b> {deal_id} — {h_escape(company)}</p>"
+            f"<p style='margin:0 0 12px 0;'><b>Deal sentence:</b> {h_escape(sentence)}</p>"
+            f"<p style='margin:0 0 12px 0;'><b>Personal note:</b> {note_html}</p>"
+            f"<p style='margin:0 0 4px 0;'><b>Recipients with note ({len(with_note)}):</b></p>"
+            + _list_html(with_note) +
+            f"<p style='margin:0 0 4px 0;'><b>Recipients without note ({len(without_note)}):</b></p>"
+            + _list_html(without_note)
+            + "".join(
+                f"<p style='margin:24px 0 8px 0;'><b>{h_escape(label)}</b></p>"
+                f"<div style='border:1px solid {EMAIL_BORDER};'>{_email_body_inner(eh)}</div>"
+                for label, _, eh in rendered)
+            + "</body></html>"
+        )
+        subject = f"[ARCHIVE] Deal alert — {company} — {len(recipients)} recipients"
+        if DRY_RUN:
+            subject = "[DRY RUN] " + subject
+        send_email(CHAD_EMAIL, subject, "\n".join(text), html)
+    except Exception as e:
+        logger.error(f"Archive copy for deal {deal_id} failed: {e}")
+
+
+def _person_id_int(person):
+    try:
+        return int(person.get("id"))
+    except (TypeError, ValueError):
+        return None
+
+
 def handle_alert_post(event):
     form = parse_post_body(event)
     if not admin_key_ok(form.get("key")):
@@ -780,6 +924,30 @@ def handle_alert_post(event):
             f"<p>No counterparty matches for {h_escape(company)} "
             f"(deal {deal_id}). Nothing sent.</p>")
 
+    note = (form.get("note") or "").strip()[:1000]
+    note_ids = set()
+    if note:
+        back = f"<p><a href='?key={ADMIN_KEY}'>&larr; Back</a></p>"
+        try:
+            note_ids = {int(x) for x in (form.get("note_ids") or "").split(",") if x.strip()}
+        except ValueError:
+            return simple_page("Not sent",
+                "<p>The list of personal-note recipients was invalid. Nothing sent.</p>" + back)
+        if not note_ids:
+            return simple_page("Not sent",
+                "<p>A personal note was entered but no recipients were selected "
+                "for it. Nothing sent.</p>" + back)
+        if len(note_ids) > NOTE_LIMIT:
+            return simple_page("Not sent",
+                f"<p>{len(note_ids)} recipients were selected for the personal note; "
+                f"the limit is {NOTE_LIMIT} (FINRA 2210). Nothing sent.</p>" + back)
+        match_ids = {_person_id_int(p) for p in matches}
+        stray = note_ids - match_ids
+        if stray:
+            return simple_page("Not sent",
+                f"<p>{len(stray)} selected note recipient(s) are no longer matches "
+                f"for this deal. Reload the table and try again. Nothing sent.</p>" + back)
+
     # Idempotency lock: one alert per deal per day; blocks double-clicks and bots.
     s3 = boto3.client("s3")
     lock_suffix = "-dry" if DRY_RUN else ""
@@ -805,53 +973,9 @@ def handle_alert_post(event):
         full_name  = f"{first_name} {(person.get('last_name') or '')}".strip()
         greeting   = first_name or full_name or "there"
         form_url   = f"{INTEREST_FORM_URL.rstrip('/')}/?person_id={person['id']}&token={make_token(person['id'])}"
-        sentence = deal_sentences(deal, company)
-        note = (form.get("note") or "").strip()[:1000]
-        note_lines = [note, ""] if note else []
-        lines = [
-            f"Hello {greeting},",
-            "",
-        ] + note_lines + [
-            sentence,
-            "",
-            f"View details: {TRADES_URL}/deal/{deal_id}",
-            "",
-            "─" * 22,
-            "",
-            "Not an offer to buy or sell securities.",
-            "",
-            "UNSUBSCRIBE OR UPDATE YOUR BUY/SELL PREFERENCES:",
-            form_url,
-            "",
-            DISCLOSURE,
-        ]
-        body = "\n".join(lines)
-        button_html = (
-            "<div style='margin:14px 0 0 0;'>"
-            + email_button(f"{TRADES_URL}/deal/{deal_id}", "View details")
-            + "</div>"
-        )
-        if note:
-            note_html = h_escape(note)
-            note_html = re.sub(
-                r"(https?://[^\s<]+|(?:www\.|[\w.-]+\.(?:com|org|net|io|ai|co|gov))[^\s<]*)",
-                lambda m: "<a href='"
-                + (m.group(0) if m.group(0).startswith("http")
-                   else "https://" + m.group(0)).rstrip(".,;:!?)")
-                + f"' style='color:{EMAIL_ACCENT};'>" + m.group(0) + "</a>",
-                note_html)
-            note_html = note_html.replace("\n", "<br>")
-            intro = ""
-            inner_html = (
-                f"<p style='font-size:14px;color:{EMAIL_INK};line-height:1.5;"
-                f"margin:0 0 14px 0;'>{note_html}</p>"
-                f"<p style='font-size:14px;color:{EMAIL_INK};line-height:1.5;"
-                f"margin:0 0 6px 0;'>{h_escape(sentence)}</p>"
-                + button_html
-            )
-        else:
-            intro = sentence
-            inner_html = button_html
+        with_note = bool(note) and _person_id_int(person) in note_ids
+        body, intro, inner_html = build_alert_email(
+            deal, deal_id, company, greeting, form_url, note if with_note else "")
         if DRY_RUN:
             header = f"[DRY RUN] Real recipient: {email} ({full_name})\n\n"
             html_body = email_shell(greeting, intro, inner_html, form_url,
@@ -865,6 +989,7 @@ def handle_alert_post(event):
             "name": full_name or "(no name)",
             "company": (person.get("company_name") or "").strip(),
             "email": email,
+            "with_note": with_note,
         })
         logger.info(f"{'[DRY] ' if DRY_RUN else ''}Alert deal {deal_id} -> {email}")
 
@@ -874,23 +999,140 @@ def handle_alert_post(event):
         "recipients_count": len(recipients),
         "dry_run": DRY_RUN,
         "company": company,
+        "note": note,
         "recipients": recipients,
     }
     save_alert_history(history)
+
+    send_alert_archive(deal, deal_id, company, note, recipients)
 
     return render_recipient_report(company, deal_id, recipients, DRY_RUN)
 
 
 ADMIN_JS = """
 var PENDING_DEAL_ID = null;
+var NOTE_LIMIT_JS = 25;
+var NOTE_PREVIEW = null, NOTE_PREVIEW_DEAL = null, NOTE_LOADING = false;
+var NOTE_ERROR = "", NOTE_TIMER = null;
 function alertCounterparties(dealId, company, matches) {
   PENDING_DEAL_ID = dealId;
   document.getElementById("modal-title").textContent =
     "Alert " + matches + " counterpart" + (matches === 1 ? "y" : "ies") +
     " about " + company;
-  document.getElementById("modal-note").value = "";
+  if (NOTE_PREVIEW_DEAL !== dealId) {
+    NOTE_PREVIEW = null; NOTE_PREVIEW_DEAL = null; NOTE_ERROR = "";
+    document.getElementById("note-list").innerHTML = "";
+  }
+  var ta = document.getElementById("modal-note");
+  ta.value = "";
+  ta.oninput = onNoteInput;
+  updateNoteUI();
   document.getElementById("alert-modal").style.display = "flex";
-  document.getElementById("modal-note").focus();
+  ta.focus();
+}
+function noteText() {
+  return document.getElementById("modal-note").value.trim();
+}
+function onNoteInput() {
+  updateNoteUI();
+  if (NOTE_TIMER) { clearTimeout(NOTE_TIMER); }
+  NOTE_TIMER = setTimeout(loadNotePreview, 400);
+}
+function loadNotePreview() {
+  var dealId = PENDING_DEAL_ID;
+  if (dealId === null || !noteText() || NOTE_LOADING) { return; }
+  if (NOTE_PREVIEW && NOTE_PREVIEW_DEAL === dealId) { return; }
+  NOTE_LOADING = true; NOTE_ERROR = "";
+  var url = window.location.pathname + "?view=note_preview&deal_id=" +
+    encodeURIComponent(dealId) + "&key=" + encodeURIComponent(ADMIN_KEY_JS);
+  fetch(url).then(function (r) {
+    if (!r.ok) { throw new Error("HTTP " + r.status); }
+    return r.json();
+  }).then(function (data) {
+    NOTE_LOADING = false;
+    if (dealId !== PENDING_DEAL_ID) { return; }
+    NOTE_PREVIEW = data; NOTE_PREVIEW_DEAL = dealId;
+    renderNoteList();
+    updateNoteUI();
+  }).catch(function (e) {
+    NOTE_LOADING = false;
+    if (dealId !== PENDING_DEAL_ID) { return; }
+    NOTE_ERROR = "Could not load note recipients (" + e.message + ").";
+    updateNoteUI();
+  });
+}
+function noteRow(p, checked, reason) {
+  var row = document.createElement("label");
+  row.style.display = "block";
+  row.style.padding = "2px 0";
+  var cb = document.createElement("input");
+  cb.type = "checkbox"; cb.className = "note-cb";
+  cb.value = p.id; cb.checked = checked;
+  cb.onchange = updateNoteUI;
+  row.appendChild(cb);
+  var bits = [p.name];
+  if (p.company) { bits.push(p.company); }
+  if (p.title) { bits.push(p.title); }
+  row.appendChild(document.createTextNode(" " + bits.join(" \u00b7 ")));
+  if (reason) {
+    var r = document.createElement("span");
+    r.className = "muted";
+    r.textContent = " \u2014 " + reason;
+    row.appendChild(r);
+  }
+  return row;
+}
+function renderNoteList() {
+  var list = document.getElementById("note-list");
+  list.innerHTML = "";
+  (NOTE_PREVIEW.keep || []).forEach(function (p) {
+    list.appendChild(noteRow(p, true, ""));
+  });
+  (NOTE_PREVIEW.cut || []).forEach(function (p) {
+    list.appendChild(noteRow(p, false, p.reason));
+  });
+}
+function checkedNoteIds() {
+  var ids = [];
+  document.querySelectorAll("#note-list .note-cb").forEach(function (cb) {
+    if (cb.checked) { ids.push(cb.value); }
+  });
+  return ids;
+}
+function updateNoteUI() {
+  var panel = document.getElementById("note-panel");
+  var count = document.getElementById("note-count");
+  var warn = document.getElementById("note-warn");
+  var send = document.getElementById("modal-send");
+  if (!noteText()) {
+    panel.style.display = "none";
+    send.disabled = false;
+    return;
+  }
+  panel.style.display = "block";
+  warn.style.color = "#6b7280";
+  if (!NOTE_PREVIEW || NOTE_PREVIEW_DEAL !== PENDING_DEAL_ID) {
+    count.textContent = NOTE_ERROR || "Loading note recipients\u2026";
+    warn.textContent = "";
+    send.disabled = true;
+    return;
+  }
+  var n = checkedNoteIds().length;
+  count.textContent = "With note: " + n + " \u00b7 Without note: " +
+    (NOTE_PREVIEW.total - n);
+  var msgs = (NOTE_PREVIEW.warnings || []).slice();
+  if (n > NOTE_LIMIT_JS) {
+    warn.style.color = "#b91c1c";
+    warn.textContent = "Max 25 with a personal note";
+    send.disabled = true;
+  } else if (n === 0) {
+    warn.style.color = "#b91c1c";
+    warn.textContent = "Select at least one recipient for the note";
+    send.disabled = true;
+  } else {
+    warn.textContent = msgs.join(" \u00b7 ");
+    send.disabled = false;
+  }
 }
 function closeAlertModal() {
   PENDING_DEAL_ID = null;
@@ -898,6 +1140,7 @@ function closeAlertModal() {
 }
 function sendAlert() {
   if (PENDING_DEAL_ID === null) { return; }
+  if (document.getElementById("modal-send").disabled) { return; }
   var f = document.createElement("form");
   f.method = "POST";
   f.action = window.location.pathname;
@@ -911,6 +1154,11 @@ function sendAlert() {
   n.type = "hidden"; n.name = "note";
   n.value = document.getElementById("modal-note").value;
   f.appendChild(n);
+  if (noteText()) {
+    var ni = document.createElement("input");
+    ni.type = "hidden"; ni.name = "note_ids"; ni.value = checkedNoteIds().join(",");
+    f.appendChild(ni);
+  }
   document.body.appendChild(f);
   f.submit();
 }
@@ -977,8 +1225,9 @@ def find_matches_for_deal(deal, all_people, buying_name_by_entry, selling_name_b
     return matches
 
 
-def _id_set(raw):
+def _cf_ids(cf, field):
     """Custom-field value (int, numeric string, list, or missing) -> set of ints."""
+    raw = (cf or {}).get(field)
     vals = raw if isinstance(raw, list) else [raw]
     out = set()
     for v in vals:
@@ -991,18 +1240,211 @@ def _id_set(raw):
     return out
 
 
-def investor_class(person):
-    """'inst', 'retail' or 'unknown' for the FINRA 2210 retail-recipient count.
-    Syndicators always count as retail."""
-    cf = person.get("custom_fields") or {}
-    if SYNDICATOR_ID in _id_set(cf.get(TRANSACTOR_TYPE_FIELD)):
-        return "retail"
-    assets = _id_set(cf.get(TOTAL_ASSETS_FIELD))
-    if assets & TOTAL_ASSETS_INSTITUTIONAL:
-        return "inst"
-    if assets & TOTAL_ASSETS_RETAIL:
-        return "retail"
-    return "unknown"
+_TITLE_RANK_4 = ("founder", "ceo", "chief", "managing partner", "managing director",
+                 "general partner", "president", "owner", "principal investor", "chairman")
+_TITLE_RANK_3 = ("partner", "cio", "head")
+_TITLE_RANK_2 = ("vp", "vice president", "director", "principal")
+
+
+def person_title(person):
+    return (person.get("position") or person.get("title") or "").strip()
+
+
+def _title_rank(person):
+    t = person_title(person).lower()
+    # "vice president" must not count as "president"
+    if any(k in t.replace("vice president", "") for k in _TITLE_RANK_4):
+        return 4
+    if any(k in t for k in _TITLE_RANK_3):
+        return 3
+    if any(k in t for k in _TITLE_RANK_2):
+        return 2
+    return 1
+
+
+def _priority_rank(person):
+    ids = _cf_ids(person.get("custom_fields"), SEC_PRIORITY_FIELD)
+    if SEC_PRIORITY_HIGH in ids:
+        return 2
+    if SEC_PRIORITY_MEDIUM in ids:
+        return 1
+    if ids & {SEC_PRIORITY_LOW, SEC_PRIORITY_NONE}:
+        return -1
+    return 0
+
+
+def _level_rank(person):
+    ids = _cf_ids(person.get("custom_fields"), INVESTOR_LEVEL_FIELD)
+    if QP_ID in ids:
+        return 3
+    if QC_ID in ids:
+        return 2
+    if ACCREDITED_ID in ids:
+        return 1
+    return 0
+
+
+def _full_name(person):
+    return f"{(person.get('first_name') or '').strip()} {(person.get('last_name') or '').strip()}".strip()
+
+
+def _int0(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
+def load_client_standing():
+    """{"<person_id>": {...}} from syndicate-dash's client-standing.json, or None."""
+    try:
+        obj = boto3.client("s3").get_object(Bucket=SNAPSHOT_BUCKET, Key=STANDING_KEY)
+        clients = json.loads(obj["Body"].read()).get("clients")
+        return clients if isinstance(clients, dict) else None
+    except Exception as e:
+        logger.warning(f"Client standing unavailable: {e}")
+        return None
+
+
+def note_filter(deal, matches, standing):
+    """Pick <= NOTE_LIMIT matches to receive a personal note. Returns
+    (keep, cut): keep = person dicts, cut = [(person, reason)]. standing is the
+    client-standing "clients" dict, or None to skip that step."""
+    remaining = list(matches)
+    cut = []
+
+    def drop(reason_for):
+        nonlocal remaining
+        kept = []
+        for p in remaining:
+            reason = reason_for(p)
+            if reason:
+                cut.append((p, reason))
+            else:
+                kept.append(p)
+        remaining = kept
+
+    def over():
+        return len(remaining) > NOTE_LIMIT
+
+    # Step 0 (always)
+    def s0(p):
+        cf = p.get("custom_fields") or {}
+        if NON_ACCREDITED_ID in _cf_ids(cf, INVESTOR_LEVEL_FIELD):
+            return "Non-accredited"
+        if _cf_ids(cf, EMAIL_STATUS_FIELD) & BAD_EMAIL_STATUS_IDS:
+            return "Email not working"
+        return None
+    drop(s0)
+
+    # Step 1: low / no secondaries priority
+    if over():
+        drop(lambda p: "Low priority" if _cf_ids(p.get("custom_fields"), SEC_PRIORITY_FIELD)
+             & {SEC_PRIORITY_LOW, SEC_PRIORITY_NONE} else None)
+
+    # Step 2: client standing
+    if over() and standing is not None:
+        def s2(p):
+            st = standing.get(str(p.get("id"))) or {}
+            if _int0(st.get("terms_repair")) > 0:
+                return "Missed terms"
+            if _int0(st.get("respond_repair")) > 0:
+                return "Missed responses"
+            return None
+        drop(s2)
+
+    # Step 3: one per firm
+    if over():
+        groups = {}
+        for i, p in enumerate(remaining):
+            cid = p.get("company_id")
+            cname = (p.get("company_name") or "").strip().lower()
+            key = ("id", cid) if cid else (("name", cname) if cname else ("solo", i))
+            groups.setdefault(key, []).append((i, p))
+        best = {}
+        for key, members in groups.items():
+            _, top = min(members, key=lambda ip: (-_title_rank(ip[1]), -_priority_rank(ip[1]),
+                                                  -_level_rank(ip[1]), ip[0]))
+            best[key] = top
+        kept = []
+        for key, members in groups.items():
+            for _, p in members:
+                if p is not best[key]:
+                    cut.append((p, f"Same firm as {_full_name(best[key]) or '(no name)'}"))
+        keep_ids = {id(p) for p in best.values()}
+        remaining = [p for p in remaining if id(p) in keep_ids]
+
+    # Step 4: ticket edges
+    if over():
+        dcf = deal.get("custom_fields", {}) or {}
+        deal_min = parse_size(dcf, MIN_SIZE_FIELD)
+        deal_max = parse_size(dcf, MAX_SIZE_FIELD)
+
+        def s4(p):
+            pmin, pmax = get_person_ticket_range(p.get("custom_fields") or {})
+            if pmin is None and pmax is None:
+                return "No ticket size"
+            if ((deal_min is not None and pmax is not None and deal_min == pmax)
+                    or (deal_max is not None and pmin is not None and deal_max == pmin)):
+                return "Edge of ticket range"
+            return None
+        drop(s4)
+
+    # Step 5: backstop
+    if over():
+        def s5_key(p):
+            _, pmax = get_person_ticket_range(p.get("custom_fields") or {})
+            return (-max(_priority_rank(p), 0), -_level_rank(p),
+                    0 if pmax is None else 1, -(pmax or 0))
+        ranked = sorted(remaining, key=s5_key)
+        for p in ranked[NOTE_LIMIT:]:
+            cut.append((p, "Lower ranked"))
+        keep_ids = {id(p) for p in ranked[:NOTE_LIMIT]}
+        remaining = [p for p in remaining if id(p) in keep_ids]
+
+    return remaining, cut
+
+
+def _person_brief(person):
+    return {"id": person.get("id"), "name": _full_name(person) or "(no name)",
+            "company": (person.get("company_name") or "").strip(),
+            "title": person_title(person)}
+
+
+def render_note_preview(event):
+    qs = event.get("queryStringParameters") or {}
+    if not admin_key_ok(qs.get("key")):
+        return {"statusCode": 403,
+                "headers": {"Content-Type": "text/plain"},
+                "body": "Forbidden"}
+
+    def _json(status, obj):
+        return {"statusCode": status,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps(obj)}
+    try:
+        deal_id = int(qs.get("deal_id", ""))
+    except ValueError:
+        return _json(400, {"error": "Missing or invalid deal_id"})
+    jwt        = get_jwt()
+    all_deals  = load_snapshot("deals.json").get("deals", [])
+    deal = next((d for d in all_deals if str(d.get("id")) == str(deal_id)), None)
+    if deal is None:
+        return _json(404, {"error": f"Deal {deal_id} not in snapshot"})
+    all_people = load_snapshot("people.json").get("people", [])
+    buying_name_by_entry  = load_field_entries(3322093, jwt)
+    selling_name_by_entry = load_field_entries(3759156, jwt)
+    matches = find_matches_for_deal(deal, all_people,
+                                    buying_name_by_entry, selling_name_by_entry)
+    standing = load_client_standing()
+    keep, cut = note_filter(deal, matches, standing)
+    warnings = [] if standing is not None else ["Standing data unavailable"]
+    return _json(200, {
+        "total": len(matches),
+        "keep": [_person_brief(p) for p in keep],
+        "cut": [dict(_person_brief(p), reason=reason) for p, reason in cut],
+        "warnings": warnings,
+    })
 
 
 def deal_summary(deal):
@@ -1141,9 +1583,6 @@ def render_admin_table(event):
         updated = parse_pipeline_ts(deal.get("updated_at"))
         matches = find_matches_for_deal(deal, all_people,
                                         buying_name_by_entry, selling_name_by_entry)
-        cls_counts = {"inst": 0, "retail": 0, "unknown": 0}
-        for m in matches:
-            cls_counts[investor_class(m)] += 1
         hist = history.get(str(deal["id"])) or {}
         ssa_raw = cf.get("custom_label_3714334")
         if isinstance(ssa_raw, list):
@@ -1171,9 +1610,6 @@ def render_admin_table(event):
             "fresh": fresh,
             "ssa": ssa,
             "match_count": len(matches),
-            "inst_count": cls_counts["inst"],
-            "retail_count": cls_counts["retail"],
-            "unknown_count": cls_counts["unknown"],
             "last_alerted": rel_time(last_iso),
             "sent_count": hist.get("recipients_count"),
             "was_dry": bool(hist.get("dry_run")),
@@ -1210,21 +1646,6 @@ def render_admin_table(event):
                    " style='color:#1f7a4d;font-weight:700;'> &#9679;</span>"
                    if r["ssa"] and side_attr == "seller" else "")
         upd_style = " style='color:#1f7a4d;font-weight:600;'" if r["fresh"] else ""
-        split_line = ""
-        if r["match_count"]:
-            n_ret, n_unk = r["retail_count"], r["unknown_count"]
-            if n_ret > 25:
-                split_color = "#b91c1c"
-            elif n_ret + n_unk > 25:
-                split_color = "#b45309"
-            else:
-                split_color = "#1f7a4d"
-            split_line = (
-                f"<div style='font-size:11px;color:{split_color};white-space:nowrap;'"
-                " title='FINRA 2210: personal note OK only if 25 or fewer retail recipients. "
-                "Institutional = Total Assets $50M+ (syndicators counted as retail). "
-                "? = Total Assets blank.'>"
-                f"Inst {r['inst_count']} &middot; Retail {n_ret} &middot; ? {n_unk}</div>")
         body_rows.append(
             f"<tr data-side='{side_attr}'>"
             f"<td><a href='{TRADES_URL}/deal/{r['id']}' target='_blank'>{comp}</a>{pipe_link}{nudge_bell}{ssa_dot}</td>"
@@ -1232,7 +1653,7 @@ def render_admin_table(event):
             f"<td>{r['nexus']}</td>"
             f"<td>{summ}</td>"
             f"<td{upd_style}>{r['updated_str']}</td>"
-            f"<td class='num'>{r['match_count']}{split_line}</td>"
+            f"<td class='num'>{r['match_count']}</td>"
             f"<td>{last}</td>"
             f"<td class='num'>{sent_cell}</td>"
             f"<td><button class='alert-btn' "
@@ -1252,9 +1673,6 @@ def render_admin_table(event):
         f"<p class='muted'>{len(rows)} active deals (all nexus types), newest first. "
         "Match counts use the same rules as the digest "
         "(whitelist, broadcast, interests, ticket size, forwards).</p>"
-        "<p class='muted'>Inst/Retail split per FINRA 2210 &amp; 4512(c): Total Assets "
-        "&ge; $50M = institutional; syndicators = retail; blank = unknown. "
-        "Personal notes only when retail &le; 25.</p>"
         "<table><tr><th>Company</th><th>Stage</th><th>Nexus</th>"
         "<th>Deal <span class='side-filters'>"
         "<button class='side-btn active' onclick='filterSide(\"all\", this)'>All</button>"
@@ -1273,9 +1691,15 @@ def render_admin_table(event):
         "<textarea id='modal-note' rows='5' "
         "placeholder='e.g. Thought you&#39;d find today&#39;s news of "
         "interest as you explore this deal:&#10;https://...'></textarea>"
+        "<div id='note-panel' style='display:none;margin-top:10px;'>"
+        "<div id='note-count' style='font-size:13px;margin-bottom:4px;'></div>"
+        "<div id='note-warn' style='font-size:12px;margin-bottom:6px;'></div>"
+        "<div id='note-list' style='max-height:260px;overflow-y:auto;"
+        "border:1px solid #e5e2dc;border-radius:6px;padding:6px 8px;font-size:13px;'></div>"
+        "</div>"
         "<div class='modal-actions'>"
         "<button class='modal-cancel' onclick='closeAlertModal()'>Cancel</button>"
-        "<button class='alert-btn' onclick='sendAlert()'>Send alert</button>"
+        "<button id='modal-send' class='alert-btn' onclick='sendAlert()'>Send alert</button>"
         "</div></div></div>"
         "</body></html>"
     )
@@ -1294,6 +1718,8 @@ def lambda_handler(event, context):
         qs = event.get("queryStringParameters") or {}
         if qs.get("view") == "recipients":
             return render_recipients_view(event)
+        if qs.get("view") == "note_preview":
+            return render_note_preview(event)
         return render_admin_table(event)
     return run_digest(event, context)
 
