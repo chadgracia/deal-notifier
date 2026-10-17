@@ -72,6 +72,11 @@ BROADCAST_YES_ID    = 6535328
 BROADCAST_NO_ID     = 6535329
 BROADCAST_HOLD_ID   = 6535330
 WHITELIST_TAG_ID    = 3280123
+TOTAL_ASSETS_FIELD  = "custom_label_3940251"
+TOTAL_ASSETS_INSTITUTIONAL = {7005670, 7005671, 7005672, 7005673}   # > $50M, > $100M, > $500M, > $1B
+TOTAL_ASSETS_RETAIL = {7005665, 7005666, 7005667, 7005668, 7005669}  # < $1M, > $1M, > $5M, > $10M, > $25M
+TRANSACTOR_TYPE_FIELD = "custom_label_3759163"
+SYNDICATOR_ID       = 6859893
 
 # Ticket size entry ID → (min, max) in dollars
 # min = lower bound of range, max = upper bound (None = no upper limit)
@@ -972,6 +977,34 @@ def find_matches_for_deal(deal, all_people, buying_name_by_entry, selling_name_b
     return matches
 
 
+def _id_set(raw):
+    """Custom-field value (int, numeric string, list, or missing) -> set of ints."""
+    vals = raw if isinstance(raw, list) else [raw]
+    out = set()
+    for v in vals:
+        if isinstance(v, bool):
+            continue
+        try:
+            out.add(int(str(v).strip()))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def investor_class(person):
+    """'inst', 'retail' or 'unknown' for the FINRA 2210 retail-recipient count.
+    Syndicators always count as retail."""
+    cf = person.get("custom_fields") or {}
+    if SYNDICATOR_ID in _id_set(cf.get(TRANSACTOR_TYPE_FIELD)):
+        return "retail"
+    assets = _id_set(cf.get(TOTAL_ASSETS_FIELD))
+    if assets & TOTAL_ASSETS_INSTITUTIONAL:
+        return "inst"
+    if assets & TOTAL_ASSETS_RETAIL:
+        return "retail"
+    return "unknown"
+
+
 def deal_summary(deal):
     """Compact 'Seller | $1M–$5M | Direct @ $85.00' style string."""
     cf   = deal.get("custom_fields", {})
@@ -1108,6 +1141,9 @@ def render_admin_table(event):
         updated = parse_pipeline_ts(deal.get("updated_at"))
         matches = find_matches_for_deal(deal, all_people,
                                         buying_name_by_entry, selling_name_by_entry)
+        cls_counts = {"inst": 0, "retail": 0, "unknown": 0}
+        for m in matches:
+            cls_counts[investor_class(m)] += 1
         hist = history.get(str(deal["id"])) or {}
         ssa_raw = cf.get("custom_label_3714334")
         if isinstance(ssa_raw, list):
@@ -1135,6 +1171,9 @@ def render_admin_table(event):
             "fresh": fresh,
             "ssa": ssa,
             "match_count": len(matches),
+            "inst_count": cls_counts["inst"],
+            "retail_count": cls_counts["retail"],
+            "unknown_count": cls_counts["unknown"],
             "last_alerted": rel_time(last_iso),
             "sent_count": hist.get("recipients_count"),
             "was_dry": bool(hist.get("dry_run")),
@@ -1171,6 +1210,21 @@ def render_admin_table(event):
                    " style='color:#1f7a4d;font-weight:700;'> &#9679;</span>"
                    if r["ssa"] and side_attr == "seller" else "")
         upd_style = " style='color:#1f7a4d;font-weight:600;'" if r["fresh"] else ""
+        split_line = ""
+        if r["match_count"]:
+            n_ret, n_unk = r["retail_count"], r["unknown_count"]
+            if n_ret > 25:
+                split_color = "#b91c1c"
+            elif n_ret + n_unk > 25:
+                split_color = "#b45309"
+            else:
+                split_color = "#1f7a4d"
+            split_line = (
+                f"<div style='font-size:11px;color:{split_color};white-space:nowrap;'"
+                " title='FINRA 2210: personal note OK only if 25 or fewer retail recipients. "
+                "Institutional = Total Assets $50M+ (syndicators counted as retail). "
+                "? = Total Assets blank.'>"
+                f"Inst {r['inst_count']} &middot; Retail {n_ret} &middot; ? {n_unk}</div>")
         body_rows.append(
             f"<tr data-side='{side_attr}'>"
             f"<td><a href='{TRADES_URL}/deal/{r['id']}' target='_blank'>{comp}</a>{pipe_link}{nudge_bell}{ssa_dot}</td>"
@@ -1178,7 +1232,7 @@ def render_admin_table(event):
             f"<td>{r['nexus']}</td>"
             f"<td>{summ}</td>"
             f"<td{upd_style}>{r['updated_str']}</td>"
-            f"<td class='num'>{r['match_count']}</td>"
+            f"<td class='num'>{r['match_count']}{split_line}</td>"
             f"<td>{last}</td>"
             f"<td class='num'>{sent_cell}</td>"
             f"<td><button class='alert-btn' "
@@ -1198,6 +1252,9 @@ def render_admin_table(event):
         f"<p class='muted'>{len(rows)} active deals (all nexus types), newest first. "
         "Match counts use the same rules as the digest "
         "(whitelist, broadcast, interests, ticket size, forwards).</p>"
+        "<p class='muted'>Inst/Retail split per FINRA 2210 &amp; 4512(c): Total Assets "
+        "&ge; $50M = institutional; syndicators = retail; blank = unknown. "
+        "Personal notes only when retail &le; 25.</p>"
         "<table><tr><th>Company</th><th>Stage</th><th>Nexus</th>"
         "<th>Deal <span class='side-filters'>"
         "<button class='side-btn active' onclick='filterSide(\"all\", this)'>All</button>"
