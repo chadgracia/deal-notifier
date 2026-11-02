@@ -1288,6 +1288,22 @@ def _full_name(person):
     return f"{(person.get('first_name') or '').strip()} {(person.get('last_name') or '').strip()}".strip()
 
 
+def _primary_contact_id(deal):
+    try:
+        v = deal.get("primary_contact_id")
+        if v not in (None, ""):
+            return int(v)
+    except (TypeError, ValueError, AttributeError):
+        pass
+    try:
+        v = (deal.get("primary_contact") or {}).get("id")
+        if v not in (None, ""):
+            return int(v)
+    except (TypeError, ValueError, AttributeError):
+        pass
+    return None
+
+
 def _int0(v):
     try:
         return int(v)
@@ -1563,6 +1579,11 @@ def render_admin_table(event):
     people_data = load_snapshot("people.json")
     all_deals   = deals_data.get("deals", [])
     all_people  = people_data.get("people", [])
+    people_by_id = {}
+    for p in all_people:
+        pid = _person_id_int(p)
+        if pid is not None:
+            people_by_id[pid] = p
     buying_name_by_entry  = load_field_entries(3322093, jwt)
     selling_name_by_entry = load_field_entries(3759156, jwt)
     history     = load_alert_history()
@@ -1599,9 +1620,20 @@ def render_admin_table(event):
             except Exception:
                 alerted_dt = None
         fresh = bool(updated and alerted_dt and updated > alerted_dt)
+        contact_id = _primary_contact_id(deal)
+        person = people_by_id.get(contact_id) if contact_id is not None else None
+        if person is None:
+            person = deal.get("primary_contact") or {}
+            if not isinstance(person, dict):
+                person = {}
+        c_name = _full_name(person)
+        c_firm = (person.get("company_name") or "").strip()
+        contact_label = ", ".join(x for x in (c_firm, c_name) if x)
         rows.append({
             "id": deal["id"],
             "company": company,
+            "contact": contact_label,
+            "contact_id": contact_id,
             "summary": deal_summary(deal),
             "stage": "Firm" if stage_id == FIRM_STAGE_ID else "Inquiry",
             "nexus": nexus_label,
@@ -1646,9 +1678,22 @@ def render_admin_table(event):
                    " style='color:#1f7a4d;font-weight:700;'> &#9679;</span>"
                    if r["ssa"] and side_attr == "seller" else "")
         upd_style = " style='color:#1f7a4d;font-weight:600;'" if r["fresh"] else ""
+        if r["contact"]:
+            c_lbl = h_escape(r["contact"])
+            if r["contact_id"]:
+                c_inner = (f"<a href='https://app.pipelinecrm.com/people/{r['contact_id']}'"
+                           f" target='_blank' style='color:inherit;text-decoration:none;'>{c_lbl}</a>")
+            else:
+                c_inner = c_lbl
+            contact_cell = (f"<td title='{h_escape(r['contact'], quote=True)}'"
+                            " style='max-width:260px;white-space:nowrap;overflow:hidden;"
+                            f"text-overflow:ellipsis;'>{c_inner}</td>")
+        else:
+            contact_cell = "<td><span class='muted'>—</span></td>"
         body_rows.append(
             f"<tr data-side='{side_attr}'>"
             f"<td><a href='{TRADES_URL}/deal/{r['id']}' target='_blank'>{comp}</a>{pipe_link}{nudge_bell}{ssa_dot}</td>"
+            f"{contact_cell}"
             f"<td>{r['stage']}</td>"
             f"<td>{r['nexus']}</td>"
             f"<td>{summ}</td>"
@@ -1673,7 +1718,7 @@ def render_admin_table(event):
         f"<p class='muted'>{len(rows)} active deals (all nexus types), newest first. "
         "Match counts use the same rules as the digest "
         "(whitelist, broadcast, interests, ticket size, forwards).</p>"
-        "<table><tr><th>Company</th><th>Stage</th><th>Nexus</th>"
+        "<table><tr><th>Company</th><th>Name</th><th>Stage</th><th>Nexus</th>"
         "<th>Deal <span class='side-filters'>"
         "<button class='side-btn active' onclick='filterSide(\"all\", this)'>All</button>"
         "<button class='side-btn' onclick='filterSide(\"buyer\", this)'>Buyers</button>"
