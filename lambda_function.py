@@ -402,6 +402,115 @@ def make_portfolio_token(person_id):
     return base64.urlsafe_b64encode(sig).decode().rstrip("=")
 
 
+# ── Deal-gate personal view links (?v=) ─────────────────────────────────────
+# Same token as the deal gate in chadgracia/trades + chadgracia/CRMDealDetails
+# (dg_make_token / _dg_sig / _DG_TOKEN_RE): "<pid>.<exp>.<sig>", sig = first 32 hex
+# of HMAC-SHA256(VIEW_LINK_SECRET, "view1|<pid>|<exp>"), exp = now + 183 days.
+# Added per recipient to trades deal links just before sending; never to archive
+# copies, admin pages, logs or history. Hard-blocked people (deal gate rules)
+# never get a token.
+DG_LINK_TTL = 183 * 86400
+_DG_TOKEN_RE = re.compile(r"^([A-Za-z0-9_-]{1,64})\.(\d{1,12})\.([0-9a-f]{32})$")
+CHAD_PERSON_ID = 1259927678          # token for DRY_RUN / test sends to Chad
+DG_HARD_DOMAINS = ("rainmakersecurities.com", "rainmakerapac.com")   # and subdomains
+# Same list as chadgracia/daily-brief MAILER_BLOCK_EMAILS (and the deal gate's DG_HARD_EMAILS).
+DG_HARD_EMAILS = frozenset({
+    "cvq@sternventures.com", "christian@belucaventures.com", "ch@acceleratesportsbusiness.com",
+    "daniel@kellscapital.com", "gselz@outsetpartners.com", "gcapello@premieralts.com",
+    "isubel@marulacap.com", "jack@hamiagroup.com", "js@acceleratesportsbusiness.com",
+    "kgilboy@outsetpartners.com", "lh@lab-137.com", "mcaccavo@bomboraadvisory.com",
+    "marko@catalytic-life.com", "beards@internetsec.com", "michael@ballardcap.com",
+    "pstriebel@outsetpartners.com", "sean@alphalavin.com", "staylor@spry.vc",
+    "tbarnes@axisgroupventures.com", "tom@impacts.capital", "wplatt@marulacap.com",
+    "yoram@pacificoakscapital.com",
+})
+DG_TRANSACTOR_FIELD = "custom_label_3759163"
+DG_HARD_TRANSACTOR_IDS = frozenset({6577160, 6888332, 6888333})   # Co-Broker, Foreign Finder, Intermediary - Other
+_TRADES_DEAL_LINK_RE = re.compile(r"(https://trades\.graciagroup\.com/deal/\d+)(\?[^\s\"'<>#]*)?")
+
+
+def _view_link_secret():
+    return os.environ.get("VIEW_LINK_SECRET", "") or ""
+
+
+def view_links_enabled():
+    """True when VIEW_LINK_SECRET is set; logs one line per call otherwise."""
+    if _view_link_secret():
+        return True
+    logger.info("view links off (VIEW_LINK_SECRET not set)")
+    return False
+
+
+def make_view_token(pid, now=None):
+    """'<pid>.<exp>.<sig>' (deal-gate "view1" token) or None when the secret is unset
+    or the pid is not a valid token pid."""
+    secret = _view_link_secret()
+    if not secret or pid is None or not _DG_TOKEN_RE.match(f"{pid}.1.{'0' * 32}"):
+        return None
+    exp = int(time.time() if now is None else now) + DG_LINK_TTL
+    sig = hmac.new(secret.encode(), f"view1|{pid}|{exp}".encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{pid}.{exp}.{sig}"
+
+
+def _person_emails(person):
+    """Lowercased addresses from every top-level email* field (string, list, or dicts)."""
+    out = set()
+    for k, v in (person or {}).items():
+        if not isinstance(k, str) or not k.lower().startswith("email") and k != "home_email":
+            continue
+        for item in (v if isinstance(v, list) else [v]):
+            if isinstance(item, dict):
+                item = item.get("email") or item.get("address") or item.get("value")
+            if isinstance(item, str) and "@" in item:
+                out.add(item.strip().lower())
+    return out
+
+
+def email_hard_blocked(email):
+    if not isinstance(email, str):
+        return False
+    e = email.strip().lower()
+    if e.count("@") != 1:
+        return False
+    if e in DG_HARD_EMAILS:
+        return True
+    domain = e.split("@", 1)[1]
+    return bool(domain) and any(domain == d or domain.endswith("." + d) for d in DG_HARD_DOMAINS)
+
+
+def person_hard_blocked(person):
+    """Deal-gate hard block: Rainmaker / listed email, or broker Transactor Type."""
+    if any(email_hard_blocked(e) for e in _person_emails(person)):
+        return True
+    return bool(_cf_ids((person or {}).get("custom_fields") or {}, DG_TRANSACTOR_FIELD)
+                & DG_HARD_TRANSACTOR_IDS)
+
+
+def recipient_view_token(person, dry_run=None, now=None):
+    """The token for this recipient's email, or None (plain links). DRY_RUN sends
+    go to Chad, so they carry Chad's own token."""
+    dry_run = DRY_RUN if dry_run is None else dry_run
+    if dry_run:
+        return make_view_token(CHAD_PERSON_ID, now)
+    if person_hard_blocked(person):
+        return None
+    return make_view_token((person or {}).get("id"), now)
+
+
+def add_view_token(content, token):
+    """Every https://trades.graciagroup.com/deal/{id} link in `content` (text or HTML)
+    with v=<token> appended. Unchanged when token is falsy or a link already has v=."""
+    if not token or not content:
+        return content
+
+    def _sub(m):
+        base, q = m.group(1), m.group(2) or ""
+        if re.search(r"(?:[?&]|&amp;)v=", q):
+            return m.group(0)
+        return base + (q + "&" if q else "?") + "v=" + token
+    return _TRADES_DEAL_LINK_RE.sub(_sub, content)
+
+
 def _auction_base_name(name):
     """Company name with any parenthetical stripped, normalised:
     '1X (Norwegian HoldCo)' -> '1x'. Lets bare interest labels match holdcos."""
@@ -1067,6 +1176,7 @@ def handle_alert_post(event):
     today   = date.today().strftime("%B %d, %Y")
     subject = f"Gracia Group — New activity on {company} — {today}"
     recipients = []
+    view_links = view_links_enabled()
     for person in matches:
         email      = (person.get("email") or "").strip()
         first_name = (person.get("first_name") or "").strip()
@@ -1076,15 +1186,16 @@ def handle_alert_post(event):
         with_note = bool(note) and _person_id_int(person) in note_ids
         body, intro, inner_html = build_alert_email(
             deal, deal_id, company, greeting, form_url, note if with_note else "")
+        vtok = recipient_view_token(person) if view_links else None
         if DRY_RUN:
             header = f"[DRY RUN] Real recipient: {email} ({full_name})\n\n"
             html_body = email_shell(greeting, intro, inner_html, form_url,
                                     banner=header.strip())
-            send_email(CHAD_EMAIL, f"[DRY RUN] {subject}", header + body,
-                       html_body)
+            send_email(CHAD_EMAIL, f"[DRY RUN] {subject}", add_view_token(header + body, vtok),
+                       add_view_token(html_body, vtok))
         else:
             html_body = email_shell(greeting, intro, inner_html, form_url)
-            send_email(email, subject, body, html_body)
+            send_email(email, subject, add_view_token(body, vtok), add_view_token(html_body, vtok))
         recipients.append({
             "name": full_name or "(no name)",
             "company": (person.get("company_name") or "").strip(),
@@ -1961,6 +2072,7 @@ def run_digest(event, context):
     no_match    = 0
     no_email    = 0
 
+    view_links = view_links_enabled()
     for person in all_people:
         if emails_sent >= MAX_EMAILS:
             logger.info(f"MAX_EMAILS ({MAX_EMAILS}) reached — stopping")
@@ -2113,14 +2225,16 @@ def run_digest(event, context):
             html_body = email_shell(
                 greeting, "New activity on trades you are following:",
                 "".join(html_blocks), form_url, banner=header.strip())
-            send_email(CHAD_EMAIL, f"[DRY RUN] {subject}", header + body,
-                       html_body)
+            vtok = recipient_view_token(person) if view_links else None
+            send_email(CHAD_EMAIL, f"[DRY RUN] {subject}", add_view_token(header + body, vtok),
+                       add_view_token(html_body, vtok))
             time.sleep(0.5)
         else:
             html_body = email_shell(
                 greeting, "New activity on trades you are following:",
                 "".join(html_blocks), form_url)
-            send_email(email, subject, body, html_body)
+            vtok = recipient_view_token(person) if view_links else None
+            send_email(email, subject, add_view_token(body, vtok), add_view_token(html_body, vtok))
             time.sleep(0.5)
 
         emails_sent += 1
