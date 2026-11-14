@@ -292,6 +292,84 @@ def load_snapshot(key):
     return json.loads(obj['Body'].read())
 
 
+# ── Deal Visibility ───────────────────────────────────────────────────────────
+# Private deals are never alerted. "Interested investors only" changes nothing
+# here (alerts already go only to people with the company in Buy Interest).
+VISIBILITY_FIELD    = "custom_label_4013323"
+VIS_ALL             = 7223456   # "All Investors"
+VIS_INTERESTED      = 7223457   # "Interested investors only"
+VIS_PRIVATE         = 7223458   # "Private"
+_VIS_KNOWN          = {VIS_ALL, VIS_INTERESTED, VIS_PRIVATE}
+VISIBILITY_OVERRIDES_KEY = "visibility-overrides.json"
+VIS_OVERRIDES_TTL   = 60
+_vis_overrides_cache = {"at": 0.0, "data": None}
+PRIVATE_NOT_SENT    = "Deal is Private. Nothing sent."
+
+
+def normalize_visibility(v):
+    """Pipeline dropdown value -> option id; blank/unknown/unparseable -> VIS_ALL."""
+    try:
+        if isinstance(v, list):
+            if not v:
+                return VIS_ALL
+            v = v[0]
+        if v is None or isinstance(v, bool):
+            return VIS_ALL
+        n = int(float(str(v).strip()))
+    except Exception:
+        return VIS_ALL
+    return n if n in _VIS_KNOWN else VIS_ALL
+
+
+def load_visibility_overrides():
+    """{str(deal_id): option_id} from visibility-overrides.json, cached 60s.
+    Missing file = {}. Never raises: on error logs one line and returns {}
+    (the deal's own Visibility field still applies)."""
+    now = time.time()
+    if (_vis_overrides_cache["data"] is not None
+            and now - _vis_overrides_cache["at"] < VIS_OVERRIDES_TTL):
+        return _vis_overrides_cache["data"]
+    try:
+        try:
+            obj = boto3.client("s3").get_object(Bucket=SNAPSHOT_BUCKET,
+                                                Key=VISIBILITY_OVERRIDES_KEY)
+            raw = json.loads(obj["Body"].read())
+        except Exception as e:
+            if "NoSuchKey" not in (type(e).__name__ + str(e)):
+                raise
+            raw = {}
+        data = {}
+        if isinstance(raw, dict):
+            for k, ent in raw.items():
+                if isinstance(ent, dict) and "v" in ent:
+                    data[str(k)] = normalize_visibility(ent.get("v"))
+    except Exception as e:
+        logger.warning(f"visibility: overrides lookup failed; using deal fields only: "
+                       f"{type(e).__name__}")
+        return {}
+    _vis_overrides_cache["at"] = now
+    _vis_overrides_cache["data"] = data
+    return data
+
+
+def deal_visibility(deal, overrides=None):
+    """Visibility option id for a deal; the overrides file wins. Never raises."""
+    try:
+        if overrides is None:
+            overrides = load_visibility_overrides()
+        did = str(deal.get("id"))
+        if did in overrides:
+            return overrides[did]
+        return normalize_visibility((deal.get("custom_fields") or {}).get(VISIBILITY_FIELD))
+    except Exception as e:
+        logger.warning(f"visibility: lookup failed; no visibility filtering: {type(e).__name__}")
+        return VIS_ALL
+
+
+def deal_is_private(deal, overrides=None):
+    return deal_visibility(deal, overrides) == VIS_PRIVATE
+
+
 def send_email(to_address, subject, body, html=None):
     ses = boto3.client("ses", region_name="us-east-1")
     body_part = {"Text": {"Data": body}}
@@ -742,13 +820,23 @@ def render_recipients_view(event):
                 "headers": {"Content-Type": "text/plain"},
                 "body": "Forbidden"}
     deal_id = qs.get("deal_id", "")
+    private_note = ""
+    try:
+        snap = load_snapshot("deals.json").get("deals", [])
+        sdeal = next((d for d in snap if str(d.get("id")) == str(deal_id)), None)
+        if sdeal is not None and deal_is_private(sdeal):
+            private_note = f"<p><b>Private</b> — {PRIVATE_NOT_SENT}</p>"
+    except Exception as e:
+        logger.warning(f"visibility: lookup failed; no visibility filtering: {type(e).__name__}")
     hist = load_alert_history().get(str(deal_id))
     if not hist:
         return simple_page("No record",
+            private_note +
             f"<p>No alert history for deal {h_escape(deal_id)}.</p>"
             f"<p><a href='?key={ADMIN_KEY}'>&larr; Back</a></p>")
     mode = " (DRY RUN — routed to Chad)" if hist.get("dry_run") else ""
     inner = (
+        private_note +
         f"<p><b>{h_escape(hist.get('company') or '')}</b> — deal {h_escape(deal_id)}<br>"
         f"Alerted {h_escape(rel_time(hist.get('last_alerted') or ''))}{mode} — "
         f"{hist.get('recipients_count')} recipient(s).</p>"
@@ -911,6 +999,11 @@ def handle_alert_post(event):
     if stage_id not in ACTIVE_STAGES or deal.get("is_archived"):
         return simple_page("Not sent",
             f"<p>Deal {deal_id} is no longer in an active stage. Nothing sent.</p>")
+
+    if deal_is_private(deal):
+        return simple_page("Not sent",
+            f"<p>{PRIVATE_NOT_SENT}</p>"
+            f"<p><a href='?key={ADMIN_KEY}'>&larr; Back</a></p>")
 
     company = ((deal.get("company") or {}).get("name") or "").strip()
     people_data = load_snapshot("people.json")
@@ -1447,6 +1540,9 @@ def render_note_preview(event):
     deal = next((d for d in all_deals if str(d.get("id")) == str(deal_id)), None)
     if deal is None:
         return _json(404, {"error": f"Deal {deal_id} not in snapshot"})
+    if deal_is_private(deal):
+        return _json(200, {"total": 0, "keep": [], "cut": [], "private": True,
+                           "warnings": [PRIVATE_NOT_SENT]})
     all_people = load_snapshot("people.json").get("people", [])
     buying_name_by_entry  = load_field_entries(3322093, jwt)
     selling_name_by_entry = load_field_entries(3759156, jwt)
@@ -1587,6 +1683,7 @@ def render_admin_table(event):
     buying_name_by_entry  = load_field_entries(3322093, jwt)
     selling_name_by_entry = load_field_entries(3759156, jwt)
     history     = load_alert_history()
+    vis_overrides = load_visibility_overrides()
 
     rows = []
     for deal in all_deals:
@@ -1645,6 +1742,7 @@ def render_admin_table(event):
             "last_alerted": rel_time(last_iso),
             "sent_count": hist.get("recipients_count"),
             "was_dry": bool(hist.get("dry_run")),
+            "private": deal_is_private(deal, vis_overrides),
         })
 
     rows.sort(key=lambda r: r["updated"] or datetime.min.replace(tzinfo=timezone.utc),
@@ -1690,6 +1788,13 @@ def render_admin_table(event):
                             f"text-overflow:ellipsis;'>{c_inner}</td>")
         else:
             contact_cell = "<td><span class='muted'>—</span></td>"
+        if r["private"]:
+            send_cell = ("<td><span class='muted' title='Private deals are never alerted'>"
+                         "Private</span></td>")
+        else:
+            send_cell = (f"<td><button class='alert-btn' "
+                         f"onclick='alertCounterparties({r['id']}, {onclick_company}, {r['match_count']})'>"
+                         f"Alert counterparties</button></td>")
         body_rows.append(
             f"<tr data-side='{side_attr}'>"
             f"<td><a href='{TRADES_URL}/deal/{r['id']}' target='_blank'>{comp}</a>{pipe_link}{nudge_bell}{ssa_dot}</td>"
@@ -1701,9 +1806,7 @@ def render_admin_table(event):
             f"<td class='num'>{r['match_count']}</td>"
             f"<td>{last}</td>"
             f"<td class='num'>{sent_cell}</td>"
-            f"<td><button class='alert-btn' "
-            f"onclick='alertCounterparties({r['id']}, {onclick_company}, {r['match_count']})'>"
-            f"Alert counterparties</button></td>"
+            f"{send_cell}"
             f"</tr>"
         )
 
@@ -1788,6 +1891,7 @@ def run_digest(event, context):
     buying_name_by_entry  = load_field_entries(3322093, jwt)
     selling_name_by_entry = load_field_entries(3759156, jwt)
     live_auctions = load_live_auctions()
+    vis_overrides = load_visibility_overrides()
 
     # Build deal index by company name
     sell_deals_by_name = {}
@@ -1801,6 +1905,9 @@ def run_digest(event, context):
             continue
         key = company_name.lower()
         deal_cf = deal.get("custom_fields", {})
+
+        if deal_is_private(deal, vis_overrides):
+            continue
 
         updated = parse_pipeline_ts(deal.get("updated_at"))
         if updated is None or updated < cutoff:
