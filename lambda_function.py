@@ -59,7 +59,7 @@ NUDGE_KEY           = os.environ.get("NUDGE_KEY", "")
 DRY_RUN             = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_EMAILS          = int(os.environ.get("MAX_EMAILS", "10"))
 LOOKBACK_HOURS      = int(os.environ["LOOKBACK_HOURS"])
-HMAC_SECRET         = os.environ["HMAC_SECRET"]
+HMAC_SECRET         = os.environ.get("HMAC_SECRET", "")
 PORTFOLIO_URL         = DESK_URL
 PORTFOLIO_HMAC_SECRET = os.environ["PORTFOLIO_HMAC_SECRET"]
 
@@ -387,6 +387,10 @@ def send_email(to_address, subject, body, html=None):
 
 
 def make_token(person_id):
+    """Interest-form token, signed with HMAC_SECRET only. Empty key -> ""
+    (never signs with an empty key; callers send nothing in that case)."""
+    if not HMAC_SECRET:
+        return ""
     sig = hmac.new(HMAC_SECRET.encode(), str(person_id).encode(), hashlib.sha256).digest()
     return base64.urlsafe_b64encode(sig).decode().rstrip("=")
 
@@ -988,6 +992,9 @@ def handle_alert_post(event):
         deal_id = int(form.get("deal_id", ""))
     except ValueError:
         return simple_page("Error", "<p>Missing or invalid deal_id.</p>")
+    if not HMAC_SECRET:
+        logger.error("deal-notifier: HMAC_SECRET is not set; alert refused (links cannot be signed)")
+        return simple_page("Not sent", "<p>Signing key missing (HMAC_SECRET). Nothing sent.</p>")
 
     jwt  = get_jwt()
     deal = fetch_live_deal(deal_id, jwt)
@@ -1873,6 +1880,9 @@ def lambda_handler(event, context):
 
 
 def run_digest(event, context):
+    if not HMAC_SECRET:
+        logger.error("deal-notifier: HMAC_SECRET is not set; digest skipped (links cannot be signed)")
+        return {"statusCode": 503, "body": "HMAC_SECRET not set; nothing sent"}
     today  = date.today().strftime("%B %d, %Y")
     cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
     logger.info(f"Recency filter: lookback={LOOKBACK_HOURS}h, cutoff={cutoff.isoformat()}")
