@@ -63,6 +63,9 @@ HMAC_SECRET         = os.environ.get("HMAC_SECRET", "")
 PORTFOLIO_URL         = DESK_URL
 PORTFOLIO_HMAC_SECRET = os.environ["PORTFOLIO_HMAC_SECRET"]
 
+# [ARCHIVE] email compliance line (append a date here later if needed)
+ARCHIVE_APPROVAL_LINE = "Public Communication Approved"
+
 # Person fields
 BUYING_FIELD        = "custom_label_3322093"
 SELLING_FIELD       = "custom_label_3759156"
@@ -80,6 +83,17 @@ NON_ACCREDITED_ID   = 6950562
 ACCREDITED_ID       = 6950563
 QP_ID               = 6950564
 QC_ID               = 7209227
+# Investor Level labels for the [ARCHIVE] email, highest first
+INVESTOR_LEVEL_LABELS = (
+    (6950564, "Qualified Purchaser"),
+    (7209227, "Qualified Client"),
+    (6950563, "Accredited"),
+    (7162165, "Substantive"),
+    (7223459, "Self-Confirmed Accredited"),
+    (7161646, "Hold"),
+    (6950562, "Non-Accredited"),
+    (6950561, "Unknown"),
+)
 EMAIL_STATUS_FIELD  = "custom_label_2447206"
 BAD_EMAIL_STATUS_IDS = {3940558, 4943722, 3940678, 7214691, 4781320}
 SEC_PRIORITY_FIELD  = "custom_label_3912746"
@@ -1035,10 +1049,12 @@ def send_alert_archive(deal, deal_id, company, note, recipients):
                              email_shell("there", intro, inner_html, generic_form_url)))
 
         def _line(r):
-            return f"{r.get('name') or ''}, {r.get('company') or ''}, {r.get('email') or ''}"
+            return (f"{r.get('name') or ''}, {r.get('company') or ''}, {r.get('email') or ''}"
+                    f" ({r.get('level') or 'Level not set'})")
 
         text = [
             f"Date/time: {sent_at}",
+            f"Compliance: {ARCHIVE_APPROVAL_LINE}",
             f"Deal: {deal_id} — {company}",
             f"Deal sentence: {sentence}",
             "",
@@ -1064,6 +1080,7 @@ def send_alert_archive(deal, deal_id, company, note, recipients):
             "<!DOCTYPE html><html><head><meta charset='utf-8'></head>"
             f"<body style='font-family:{EMAIL_FONT_STACK};font-size:14px;color:{EMAIL_INK};'>"
             f"<p style='margin:0 0 4px 0;'><b>Date/time:</b> {h_escape(sent_at)}</p>"
+            f"<p style='margin:0 0 4px 0;'><b>Compliance:</b> {h_escape(ARCHIVE_APPROVAL_LINE)}</p>"
             f"<p style='margin:0 0 4px 0;'><b>Deal:</b> {deal_id} — {h_escape(company)}</p>"
             f"<p style='margin:0 0 12px 0;'><b>Deal sentence:</b> {h_escape(sentence)}</p>"
             f"<p style='margin:0 0 12px 0;'><b>Personal note:</b> {note_html}</p>"
@@ -1202,6 +1219,7 @@ def handle_alert_post(event):
             "company": (person.get("company_name") or "").strip(),
             "email": email,
             "with_note": with_note,
+            "level": _level_label(person),
         })
         logger.info(f"{'[DRY] ' if DRY_RUN else ''}Alert deal {deal_id} -> {email}")
 
@@ -1494,6 +1512,15 @@ def _level_rank(person):
     if ACCREDITED_ID in ids:
         return 1
     return 0
+
+
+def _level_label(person):
+    """Highest Investor Level label on the person, else "Level not set"."""
+    ids = _cf_ids(person.get("custom_fields"), INVESTOR_LEVEL_FIELD)
+    for oid, label in INVESTOR_LEVEL_LABELS:
+        if oid in ids:
+            return label
+    return "Level not set"
 
 
 def _full_name(person):
