@@ -137,6 +137,7 @@ LAYERS_MAP          = {7000228: "1-Layer", 7000229: "2-Layer", 7000230: "3-Layer
 SELLER_FEE_FIELD    = "custom_label_3940560"
 MGMT_FEE_FIELD      = "custom_label_3940558"
 CARRY_FIELD         = "custom_label_3940559"
+DEADLINE_FIELD      = "custom_label_4006402"
 
 
 def fmt_fee(v):
@@ -1781,6 +1782,17 @@ a { color: #2563eb; text-decoration: none; }
 """
 
 
+def parse_deadline(cf):
+    """Deal-level Deadline (YYYY/MM/DD or YYYY-MM-DD) -> date, or None."""
+    try:
+        raw = (cf or {}).get(DEADLINE_FIELD)
+        if not raw:
+            return None
+        return datetime.strptime(str(raw)[:10].replace("/", "-"), "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
 def render_admin_table(event):
     qs  = event.get("queryStringParameters") or {}
     if not admin_key_ok(qs.get("key")):
@@ -1861,12 +1873,13 @@ def render_admin_table(event):
             "sent_count": hist.get("recipients_count"),
             "was_dry": bool(hist.get("dry_run")),
             "private": deal_is_private(deal, vis_overrides),
+            "deadline": parse_deadline(cf),
         })
 
     rows.sort(key=lambda r: r["updated"] or datetime.min.replace(tzinfo=timezone.utc),
               reverse=True)
-    rows = rows[:150]
 
+    today_utc = datetime.now(timezone.utc).date()
     body_rows = []
     for r in rows:
         comp = h_escape(r["company"])
@@ -1913,6 +1926,16 @@ def render_admin_table(event):
             send_cell = (f"<td><button class='alert-btn' "
                          f"onclick='alertCounterparties({r['id']}, {onclick_company}, {r['match_count']})'>"
                          f"Alert counterparties</button></td>")
+        dl = r["deadline"]
+        if dl is None:
+            deadline_cell = "<td style='white-space:nowrap;'></td>"
+        else:
+            dl_txt = f"{dl.strftime('%b')} {dl.day}, {dl.year}"
+            if dl < today_utc:
+                deadline_cell = ("<td style='color:#b91c1c;font-weight:700;white-space:nowrap;'"
+                                 f" title='Deadline passed'>{dl_txt}</td>")
+            else:
+                deadline_cell = f"<td style='white-space:nowrap;'>{dl_txt}</td>"
         body_rows.append(
             f"<tr data-side='{side_attr}'>"
             f"<td><a href='{TRADES_URL}/deal/{r['id']}' target='_blank'>{comp}</a>{pipe_link}{nudge_bell}{ssa_dot}</td>"
@@ -1920,6 +1943,7 @@ def render_admin_table(event):
             f"<td>{r['stage']}</td>"
             f"<td>{r['nexus']}</td>"
             f"<td>{summ}</td>"
+            f"{deadline_cell}"
             f"<td{upd_style}>{r['updated_str']}</td>"
             f"<td class='num'>{r['match_count']}</td>"
             f"<td>{last}</td>"
@@ -1944,7 +1968,7 @@ def render_admin_table(event):
         "<button class='side-btn active' onclick='filterSide(\"all\", this)'>All</button>"
         "<button class='side-btn' onclick='filterSide(\"buyer\", this)'>Buyers</button>"
         "<button class='side-btn' onclick='filterSide(\"seller\", this)'>Sellers</button>"
-        "</span></th><th>Updated</th>"
+        "</span></th><th>Deadline</th><th>Updated</th>"
         "<th>Matches</th><th>Last alerted</th><th>Sent</th><th></th></tr>"
         + "".join(body_rows) +
         "</table>"
