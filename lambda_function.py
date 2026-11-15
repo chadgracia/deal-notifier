@@ -1856,8 +1856,6 @@ def render_admin_table(event):
         if not company:
             continue
         updated = parse_pipeline_ts(deal.get("updated_at"))
-        matches = find_matches_for_deal(deal, all_people,
-                                        buying_name_by_entry, selling_name_by_entry)
         hist = history.get(str(deal["id"])) or {}
         ssa_raw = cf.get("custom_label_3714334")
         if isinstance(ssa_raw, list):
@@ -1884,6 +1882,7 @@ def render_admin_table(event):
         c_firm = (person.get("company_name") or "").strip()
         contact_label = ", ".join(x for x in (c_firm, c_name) if x)
         rows.append({
+            "deal": deal,
             "id": deal["id"],
             "company": company,
             "contact": contact_label,
@@ -1895,7 +1894,7 @@ def render_admin_table(event):
             "updated_str": rel_time(updated.isoformat()) if updated else "",
             "fresh": fresh,
             "ssa": ssa,
-            "match_count": len(matches),
+            "match_count": 0,
             "last_alerted": rel_time(last_iso),
             "sent_count": hist.get("recipients_count"),
             "was_dry": bool(hist.get("dry_run")),
@@ -1903,8 +1902,37 @@ def render_admin_table(event):
             "deadline": parse_deadline(cf),
         })
 
+    total_active = len(rows)
+    q = (qs.get("q") or "").strip()
+    if q:
+        q_low = q.lower()
+        rows = [r for r in rows
+                if q_low in r["company"].lower() or q_low in r["contact"].lower()]
     rows.sort(key=lambda r: r["updated"] or datetime.min.replace(tzinfo=timezone.utc),
               reverse=True)
+    rows = rows[:150]
+
+    # Pass 2: matches only for the rows actually displayed.
+    for r in rows:
+        r["match_count"] = len(find_matches_for_deal(
+            r["deal"], all_people, buying_name_by_entry, selling_name_by_entry))
+
+    q_esc = h_escape(q, quote=True)
+    if q:
+        intro = f"{len(rows)} of {total_active} active deals match '{q_esc}'. "
+        clear_link = f" <a href='?key={ADMIN_KEY}'>Clear</a>"
+    else:
+        intro = (f"Showing the {len(rows)} most recently updated of {total_active} "
+                 "active deals. Search to find any other deal. ")
+        clear_link = ""
+    search_form = (
+        "<form method='get' style='margin:8px 0 12px;'>"
+        f"<input type='hidden' name='key' value='{h_escape(ADMIN_KEY, quote=True)}'>"
+        f"<input type='text' name='q' value='{q_esc}' placeholder='Company, firm or name'"
+        " style='padding:4px 8px;width:260px;'> "
+        "<button type='submit'>Search</button>"
+        f"{clear_link}</form>"
+    )
 
     today_utc = datetime.now(timezone.utc).date()
     body_rows = []
@@ -1987,9 +2015,10 @@ def render_admin_table(event):
         "<script>var ADMIN_KEY_JS=" + json.dumps(ADMIN_KEY) + ";" + ADMIN_JS + "</script>"
         "</head><body>"
         "<h1>Deal Notifier — Manual Alerts</h1>"
-        f"<p class='muted'>{len(rows)} active deals (all nexus types), newest first. "
+        f"<p class='muted'>{intro}"
         "Match counts use the same rules as the digest "
         "(whitelist, broadcast, interests, ticket size, forwards).</p>"
+        + search_form +
         "<table><tr><th>Company</th><th>Name</th><th>Stage</th><th>Nexus</th>"
         "<th>Deal <span class='side-filters'>"
         "<button class='side-btn active' onclick='filterSide(\"all\", this)'>All</button>"
