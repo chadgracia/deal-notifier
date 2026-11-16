@@ -1405,10 +1405,23 @@ function filterSide(side, btn) {
 """
 
 
+def alert_excluded(person):
+    """True if this person must never receive a deal alert: Non-Accredited, a bad
+    email status, or a Rainmaker / listed address. Broker Transactor Types are NOT
+    excluded here (unlike person_hard_blocked); they still get alerts, just no view token."""
+    cf = person.get("custom_fields") or {}
+    if NON_ACCREDITED_ID in _cf_ids(cf, INVESTOR_LEVEL_FIELD):
+        return True
+    if _cf_ids(cf, EMAIL_STATUS_FIELD) & BAD_EMAIL_STATUS_IDS:
+        return True
+    return any(email_hard_blocked(e) for e in _person_emails(person))
+
+
 def find_matches_for_deal(deal, all_people, buying_name_by_entry, selling_name_by_entry):
     """People who would be alerted for this deal, using the same rules as the digest:
-    whitelist tag, broadcast not No/Hold, has email, interest matches company,
-    ticket range fits, forward-only deals require Accepts Forwards."""
+    whitelist tag, broadcast not No/Hold, not alert_excluded (not Non-Accredited,
+    working email status, no Rainmaker/blocked addresses), has email, interest
+    matches company, ticket range fits, forward-only deals require Accepts Forwards."""
     cf_deal = deal.get("custom_fields", {})
     company = ((deal.get("company") or {}).get("name") or "").strip().lower()
     if not company:
@@ -1432,6 +1445,8 @@ def find_matches_for_deal(deal, all_people, buying_name_by_entry, selling_name_b
         braw = cf.get(BROADCAST_FIELD)
         bids = braw if isinstance(braw, list) else ([braw] if braw else [])
         if BROADCAST_NO_ID in bids or BROADCAST_HOLD_ID in bids:
+            continue
+        if alert_excluded(person):
             continue
         names = set()
         for eid in (cf.get(interest_field) or []):
@@ -2017,7 +2032,8 @@ def render_admin_table(event):
         "<h1>Deal Notifier — Manual Alerts</h1>"
         f"<p class='muted'>{intro}"
         "Match counts use the same rules as the digest "
-        "(whitelist, broadcast, interests, ticket size, forwards).</p>"
+        "(whitelist, broadcast, not Non-Accredited, working email status, "
+        "no Rainmaker/blocked addresses, interests, ticket size, forwards).</p>"
         + search_form +
         "<table><tr><th>Company</th><th>Name</th><th>Stage</th><th>Nexus</th>"
         "<th>Deal <span class='side-filters'>"
@@ -2176,6 +2192,8 @@ def run_digest(event, context):
         else:
             broadcast_ids = [broadcast_raw] if broadcast_raw else []
         if BROADCAST_NO_ID in broadcast_ids or BROADCAST_HOLD_ID in broadcast_ids:
+            continue
+        if alert_excluded(person):
             continue
 
         person_min, person_max = get_person_ticket_range(cf)

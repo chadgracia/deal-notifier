@@ -191,6 +191,9 @@ class Emails(unittest.TestCase):
         by_to = {m["to"]: m for m in mails}
         seen = set()
         for p in PEOPLE:
+            if which == "digest" and lf.alert_excluded(p):
+                self.assertNotIn(p["email"], by_to)                          # Rainmaker / listed: no digest
+                continue
             m = by_to[p["email"]]
             text_toks, html_toks = tokens_in(m["body"]), tokens_in(m["html"])
             if p["id"] in OK_IDS:
